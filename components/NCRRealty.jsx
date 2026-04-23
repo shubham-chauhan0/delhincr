@@ -1032,7 +1032,7 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
   const [srch,setSrch] = useState('');
   const [view,setView] = useState('areas');
   const [sort,setSort] = useState('pins');
-  const dark = !isMobile; // dark colours for desktop sidebar, light for mobile sheet
+  const dark = false; // panel background is white in both desktop and mobile after UI pass
 
   const bg   = dark ? 'transparent'              : '#fff';
   const bd   = dark ? 'rgba(255,255,255,.06)'    : '#f5f5f5';
@@ -1127,18 +1127,18 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
                 const cc=CITIES[area.city]?.color||'#e85d26';
                 return (
                   <button key={area.id} onClick={()=>{onFlyTo({lat:area.lat,lng:area.lng,zoom:14,ts:Date.now()});if(isMobile)onClose();}}
-                    style={{width:'100%',padding:'11px 14px',border:'none',borderBottom:`1px solid ${divL}`,background:bg,cursor:'pointer',textAlign:'left',transition:'background .1s'}}
+                    style={{width:'100%',padding:'11px 14px',border:'none',borderBottom:`1px solid ${divL}`,background:bg,cursor:'pointer',textAlign:'left',transition:'background .1s',opacity:total===0?0.55:1}}
                     onMouseEnter={e=>e.currentTarget.style.background=hov} onMouseLeave={e=>e.currentTarget.style.background=bg}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:total>0?5:0}}>
                       <div style={{display:'flex',alignItems:'center',gap:7}}>
-                        <div style={{width:8,height:8,borderRadius:'50%',background:cc,flexShrink:0}}/>
-                        <span style={{fontWeight:600,fontSize:14,color:tc}}>{area.name}</span>
+                        <div style={{width:8,height:8,borderRadius:'50%',background:total===0?'#d1d5db':cc,flexShrink:0}}/>
+                        <span style={{fontWeight:total===0?400:600,fontSize:14,color:tc}}>{area.name}</span>
                         {avail>0&&<span style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#dcfce7',padding:'2px 6px',borderRadius:99,border:'1px solid #86efac'}}>{avail} avail</span>}
                       </div>
                       <span style={{fontSize:11,color:sc,background:bd,padding:'2px 7px',borderRadius:99}}>{CITIES[area.city]?.label}</span>
                     </div>
                     {total>0&&<>
-                      <div style={{height:3,background:dark?'rgba(255,255,255,.08)':'#f0f0f0',borderRadius:99,margin:'6px 0 5px',overflow:'hidden'}}>
+                      <div style={{height:3,background:'#f0f0f0',borderRadius:99,margin:'6px 0 5px',overflow:'hidden'}}>
                         <div style={{height:'100%',width:`${(aR/maxR)*100}%`,background:rCol(aR),borderRadius:99,transition:'width .3s'}}/>
                       </div>
                       <div style={{display:'flex',gap:10,alignItems:'center'}}>
@@ -1147,7 +1147,7 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
                         <span style={{fontSize:11,color:sc,marginLeft:'auto'}}>{total} pin{total>1?'s':''}</span>
                       </div>
                     </>}
-                    {total===0&&<div style={{fontSize:12,color:noD,marginTop:2}}>No data yet — be the first to pin</div>}
+                    {total===0&&<div style={{fontSize:12,color:'#9ca3af',marginTop:2}}>No data yet</div>}
                   </button>
                 );
               })
