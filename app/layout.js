@@ -1,55 +1,65 @@
 import './globals.css';
 
+const BASE = process.env.NEXT_PUBLIC_APP_URL || 'https://delhincr-rents.com';
+
 export const metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://ncrrealty.in'),
+  metadataBase: new URL(BASE),
   title: {
-    default: 'NCR Realty — Real Rent & Property Prices Delhi NCR',
+    default: 'Delhi NCR Rent & Property Prices — Real Data from Residents',
     template: '%s | NCR Realty',
   },
   description:
-    'See what people actually pay to rent or buy property in Delhi, Gurgaon, Noida, Faridabad & Ghaziabad. Community-submitted, anonymous, no brokers.',
+    'See what people actually pay to rent or buy property in Delhi, Gurgaon, Noida, Faridabad & Ghaziabad. Community-submitted, anonymous, no brokers. Real rents for 2BHK, 3BHK, builder floor across 85+ localities.',
   keywords: [
     'Delhi NCR rent',
+    'rent in Delhi 2025',
     'Gurgaon flat rent',
     'Noida property price',
-    'DLF rent price',
-    'Golf Course Road rent',
-    'Dwarka rent',
     '2BHK rent Delhi',
-    'property price per sqft Gurgaon',
+    '3BHK rent Gurgaon',
+    'real rent data Delhi NCR',
+    'property price per sqft Noida',
     'bachelor flat Delhi',
+    'flat available Delhi NCR',
     'community rent data India',
-    'real property prices NCR 2025',
+    'real property prices NCR',
+    'rent without broker Delhi',
+    'Indirapuram flat rent',
+    'Dwarka flat rent',
+    'Hauz Khas rent',
   ],
   authors: [{ name: 'NCR Realty Community' }],
   creator: 'NCR Realty',
+  alternates: {
+    canonical: BASE,
+  },
   openGraph: {
     type: 'website',
     locale: 'en_IN',
-    url: 'https://ncrrealty.in',
+    url: BASE,
     siteName: 'NCR Realty',
-    title: 'NCR Realty — Real Rent & Property Prices Delhi NCR',
+    title: 'Delhi NCR Rent & Property Prices — Real Data from Residents',
     description:
-      'See what people actually pay in Delhi, Gurgaon, Noida. Crowdsourced rent & buy data. Anonymous, no brokers.',
+      'Real rents & buy prices across Delhi, Gurgaon, Noida — submitted anonymously by residents. No brokers, no inflated listings.',
     images: [
       {
         url: '/og-image.png',
         width: 1200,
         height: 630,
-        alt: 'NCR Realty — Community Property Data',
+        alt: 'NCR Realty — Real Rent & Property Data for Delhi NCR',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'NCR Realty — Real Rent & Property Prices Delhi NCR',
-    description: 'Crowdsourced rent & buy data. Anonymous, no brokers.',
+    title: 'Delhi NCR Rent & Property Prices — Real Data from Residents',
+    description: 'Real rents & buy prices across Delhi NCR. Community data, no brokers.',
     images: ['/og-image.png'],
   },
   robots: {
     index: true,
     follow: true,
-    googleBot: { index: true, follow: true },
+    googleBot: { index: true, follow: true, 'max-snippet': -1, 'max-image-preview': 'large' },
   },
   icons: {
     icon: '/favicon.ico',
