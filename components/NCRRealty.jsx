@@ -210,7 +210,9 @@ function calcBuy({ price=0, brokerage=0, stampDuty=0, registration=0, legal=0, i
   const extras = b+sd+r+l+i+m;
   const total  = p+extras;
   return { basePrice:p, extras, total, overagePct: p>0 ? +((extras/p)*100).toFixed(1) : 0 };
-}(area, allPins, prefs){
+}
+// TODO: add commute_score once commute time data is available
+function scoreAreaWizard(area, allPins, prefs){
   const { intent, budget, bhk, wantMetro, tenantType, furnished } = prefs;
   const areaPins = allPins.filter(p=>p.area_id===area.id && p.mode===intent);
   if(!areaPins.length) return null;
