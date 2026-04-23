@@ -8,62 +8,61 @@ export const metadata = {
   robots: { index: false, follow: false },
 };
 
+// Wraps any Supabase query — returns [] if the table doesn't exist or query fails
+async function safeQuery(queryFn) {
+  try {
+    const { data, error } = await queryFn();
+    if (error) { console.warn('Admin query warning:', error.message); return []; }
+    return data || [];
+  } catch (e) {
+    console.warn('Admin query failed:', e.message);
+    return [];
+  }
+}
+
 async function fetchAdminData() {
   const db = supabaseAdmin();
   if (!db) return null;
 
-  const [
-    { data: pins },
-    { data: areaStats },
-    { data: fhPins },
-    { data: matches },
-    { data: reports },
-    { data: comments },
-  ] = await Promise.all([
-    // All pins including flagged — service role bypasses RLS
-    db.from('pins')
-      .select('id,area_id,area_name,city,mode,bhk,rent,price,is_available,is_flagged,flag_count,upvotes,prop_type,submitter_ip,created_at')
-      .order('created_at', { ascending: false })
-      .limit(500),
+  try {
+    // Run all queries in parallel — each is individually safe
+    const [pins, areaStats, fhPins, matches, reports] = await Promise.all([
+      safeQuery(() =>
+        db.from('pins')
+          .select('id,area_id,area_name,city,mode,bhk,rent,price,is_available,is_flagged,flag_count,upvotes,prop_type,submitter_ip,created_at')
+          .order('created_at', { ascending: false })
+          .limit(500)
+      ),
+      safeQuery(() =>
+        db.from('area_stats')
+          .select('area_id,area_name,city,total_pins,rent_count,buy_count,avg_rent,min_rent,max_rent,avg_price,avg_price_per_sqft,last_pin_at')
+          .order('total_pins', { ascending: false })
+      ),
+      safeQuery(() =>
+        db.from('flat_hunt_pins')
+          .select('id,role,area_name,bhk,budget,timeline,is_active,matched,created_at')
+          .order('created_at', { ascending: false })
+          .limit(300)
+      ),
+      safeQuery(() =>
+        db.from('flat_hunt_matches')
+          .select('id,seeker_id,owner_id,distance_m,email_sent,created_at')
+          .order('created_at', { ascending: false })
+          .limit(200)
+      ),
+      safeQuery(() =>
+        db.from('reports')
+          .select('id,pin_id,reason,reporter_ip,created_at')
+          .order('created_at', { ascending: false })
+          .limit(100)
+      ),
+    ]);
 
-    db.from('area_stats')
-      .select('area_id,area_name,city,total_pins,rent_count,buy_count,avg_rent,min_rent,max_rent,avg_price,avg_price_per_sqft,last_pin_at')
-      .order('total_pins', { ascending: false }),
-
-    db.from('flat_hunt_pins')
-      .select('id,role,area_name,bhk,budget,timeline,gender_pref,is_active,matched,created_at,expires_at')
-      .order('created_at', { ascending: false })
-      .limit(300),
-
-    db.from('flat_hunt_matches')
-      .select('id,seeker_id,owner_id,distance_m,email_sent,created_at')
-      .order('created_at', { ascending: false })
-      .limit(200),
-
-    // reports table (schema_fix.sql)
-    db.from('reports')
-      .select('id,pin_id,reason,reporter_ip,created_at')
-      .order('created_at', { ascending: false })
-      .limit(100)
-      .then(r => r) // safe even if table missing
-      .catch(() => ({ data: [] })),
-
-    db.from('comments')
-      .select('id,pin_id,created_at')
-      .order('created_at', { ascending: false })
-      .limit(500)
-      .catch(() => ({ data: [] })),
-  ]);
-
-  return {
-    pins:      pins      ?? [],
-    areaStats: areaStats ?? [],
-    fhPins:    fhPins    ?? [],
-    matches:   matches   ?? [],
-    reports:   reports   ?? [],
-    comments:  comments  ?? [],
-    fetchedAt: new Date().toISOString(),
-  };
+    return { pins, areaStats, fhPins, matches, reports, fetchedAt: new Date().toISOString() };
+  } catch (err) {
+    console.error('fetchAdminData crashed:', err);
+    return null;
+  }
 }
 
 export default async function AdminPage({ searchParams }) {
@@ -73,8 +72,9 @@ export default async function AdminPage({ searchParams }) {
   const authed = ADMIN_SECRET && token === ADMIN_SECRET;
 
   if (!authed) {
-    const err = (await searchParams)?.err;
-    return <LoginScreen wrongPassword={!!err} />;
+    // searchParams may be a Promise in Next 15 — handle both
+    const params = searchParams instanceof Promise ? await searchParams : (searchParams || {});
+    return <LoginScreen wrongPassword={!!params.err} />;
   }
 
   const data = await fetchAdminData();
