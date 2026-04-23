@@ -192,8 +192,25 @@ function nearestMetroKm(lat,lng){
 //   metro_prox   0-20  — proximity to nearest metro line point
 //   availability 0-10  — available flats right now
 //   bhk_match    0-10  — area has pins for preferred BHK
-// TODO: add commute_score once commute time data is available
-function scoreAreaWizard(area, allPins, prefs){
+// ─── Hidden Cost Calculator — pure functions ──────────────────────────────────
+// All values in ₹. Returns NaN-safe results (missing inputs treated as 0).
+function calcRent({ rent=0, deposit=0, brokerage=0, maintenance=0, setup=0 }){
+  const r=+rent||0, d=+deposit||0, b=+brokerage||0, m=+maintenance||0, s=+setup||0;
+  const upfront   = d + b + s + r;          // money out on move-in day (deposit+brokerage+setup+first rent)
+  const monthly   = r + m;                  // recurring monthly outflow
+  const total6m   = upfront + monthly*5;    // months 2-6 after move-in
+  const total12m  = upfront + monthly*11;
+  return { upfront, monthly, total6m, total12m,
+           effMonthly6m:  total6m/6,
+           effMonthly12m: total12m/12 };
+}
+function calcBuy({ price=0, brokerage=0, stampDuty=0, registration=0, legal=0, interiors=0, misc=0 }){
+  const p=+price||0, b=+brokerage||0, sd=+stampDuty||0, r=+registration||0,
+        l=+legal||0, i=+interiors||0, m=+misc||0;
+  const extras = b+sd+r+l+i+m;
+  const total  = p+extras;
+  return { basePrice:p, extras, total, overagePct: p>0 ? +((extras/p)*100).toFixed(1) : 0 };
+}(area, allPins, prefs){
   const { intent, budget, bhk, wantMetro, tenantType, furnished } = prefs;
   const areaPins = allPins.filter(p=>p.area_id===area.id && p.mode===intent);
   if(!areaPins.length) return null;
@@ -1074,7 +1091,7 @@ function PinForm({ onSubmit, onClose, defaultMode='rent', prefLat, prefLng }) {
 }
 
 // ─── PinDetail ────────────────────────────────────────────────────────────────
-function PinDetail({ pin, onClose, onUpvote, onFlyTo }) {
+function PinDetail({ pin, onClose, onUpvote, onFlyTo, onCalc }) {
   const [tab,setTab]         = useState('info');
   const [comments,setComs]   = useState([]);
   const [cBody,setCBody]     = useState('');
@@ -1150,6 +1167,11 @@ function PinDetail({ pin, onClose, onUpvote, onFlyTo }) {
               <button onClick={()=>onUpvote(pin.id)} style={{padding:'10px 12px',borderRadius:10,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid #e0e0e0',background:'#fafafa',color:'#888'}}>👍 {pin.upvotes||0}</button>
               <a href={`https://wa.me/?text=${waText(pin)}`} target="_blank" rel="noreferrer" style={{padding:'10px',borderRadius:10,fontSize:12,fontWeight:700,background:'#25D366',color:'#fff',textDecoration:'none',display:'flex',alignItems:'center',justifyContent:'center',gap:5}}>📤 Share</a>
             </div>
+            {onCalc&&(
+              <button onClick={()=>onCalc(pin)} style={{width:'100%',padding:'9px',borderRadius:10,fontSize:12,fontWeight:700,cursor:'pointer',border:'1.5px solid #7c3aed',background:'#f5f3ff',color:'#7c3aed',marginBottom:12}}>
+                💰 Calculate true cost
+              </button>
+            )}
             {pin.is_available&&<div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:10,padding:'12px 13px',fontSize:13,color:'#166534',lineHeight:1.6}}>✅ <strong>This flat is available.</strong> Use the Share button to send via WhatsApp — the owner will see your interest.</div>}
           </>}
 
@@ -2153,6 +2175,225 @@ function BudgetWizard({ pins, onClose, onFlyTo, onApplyFilters }) {
   );
 }
 
+// ─── Hidden Cost Calculator ───────────────────────────────────────────────────
+function HiddenCostCalc({ onClose, prefillPin }) {
+  const initMode = prefillPin?.mode || 'rent';
+  const [mode, setMode] = useState(initMode);
+
+  // ── Rent inputs ──────────────────────────────────────────────────────────
+  const [rent,      setRent]  = useState(prefillPin?.mode==='rent' ? String(prefillPin.rent||'')  : '');
+  const [deposit,   setDep]   = useState(prefillPin?.mode==='rent' ? String((prefillPin.rent||0)*2) : '');
+  const [brokRent,  setBRent] = useState('');
+  const [maint,     setMaint] = useState('2000');
+  const [setup,     setSetup] = useState('');
+
+  // ── Buy inputs ───────────────────────────────────────────────────────────
+  const [price,   setPrice] = useState(prefillPin?.mode==='buy' ? String(prefillPin.price||'') : '');
+  const [brokBuy, setBBuy]  = useState('');
+  const [stamp,   setStamp] = useState('');
+  const [reg,     setReg]   = useState('');
+  const [legal,   setLegal] = useState('10000');
+  const [intCost, setInt]   = useState('');
+  const [misc,    setMisc]  = useState('');
+
+  // live results
+  const rr = calcRent({ rent, deposit:deposit, brokerage:brokRent, maintenance:maint, setup });
+  const br = calcBuy({ price, brokerage:brokBuy, stampDuty:stamp, registration:reg, legal, interiors:intCost, misc });
+
+  const fmt = n => n>=1e7 ? `₹${(n/1e7).toFixed(2)}Cr` : n>=1e5 ? `₹${(n/1e5).toFixed(1)}L` : n>=1000 ? `₹${Math.round(n/1000)}K` : `₹${Math.round(n).toLocaleString()}`;
+  const inp = (val, set, ph) => (
+    <div style={{position:'relative'}}>
+      <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'#9ca3af',fontFamily:'DM Mono,monospace',fontSize:13}}>₹</span>
+      <input type="number" className="inp" value={val} onChange={e=>set(e.target.value)} placeholder={ph}
+        style={{paddingLeft:24, textAlign:'right', fontFamily:'DM Mono,monospace', fontSize:13}}/>
+    </div>
+  );
+  const Row = ({label, val, bold, accent, border}) => (
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+      padding:'8px 0', borderTop: border ? '1.5px solid #e5e7eb' : '1px solid #f3f4f6',
+      marginTop: border ? 4 : 0}}>
+      <span style={{fontSize:13,color:bold?'#111':'#6b7280',fontWeight:bold?700:400}}>{label}</span>
+      <span style={{fontFamily:'DM Mono,monospace',fontSize:bold?16:13,fontWeight:bold?800:600,
+        color:accent||( bold?'#111':'#374151')}}>{val}</span>
+    </div>
+  );
+  const Hint = ({label, val, onClick}) => (
+    <button onMouseDown={e=>{e.preventDefault();onClick();}}
+      style={{fontSize:10.5,color:'#7c3aed',background:'#f5f3ff',border:'1px solid #e9d5ff',
+        borderRadius:99,padding:'2px 8px',cursor:'pointer',marginLeft:5,fontWeight:600}}>
+      {label} = {val}
+    </button>
+  );
+
+  const hasBudget = mode==='rent' ? (+rent>0) : (+price>0);
+
+  return (
+    <div className="overlay fi" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div className="sheet su" style={{maxHeight:'92dvh'}}>
+        <div className="handle"/>
+        <div className="sh-head" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:16,color:'#111'}}>💰 True Cost Calculator</div>
+            <div style={{fontSize:11,color:'#9ca3af',marginTop:2}}>All hidden costs, no surprises</div>
+          </div>
+          <button onClick={onClose} style={{width:30,height:30,borderRadius:'50%',border:'1.5px solid #e5e7eb',background:'#f9fafb',cursor:'pointer',fontSize:16,color:'#888',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
+        </div>
+
+        {/* Mode toggle */}
+        <div style={{padding:'10px 18px 0',flexShrink:0}}>
+          <div style={{display:'flex',background:'#f3f4f6',borderRadius:10,padding:3,gap:2}}>
+            {[['rent','🏠 Renting'],['buy','🏢 Buying']].map(([m,l])=>(
+              <button key={m} onClick={()=>setMode(m)} style={{flex:1,padding:'8px',borderRadius:8,fontSize:13,fontWeight:700,
+                cursor:'pointer',border:'none',background:mode===m?'#fff':'transparent',
+                color:mode===m?(m==='rent'?'#e85d26':'#2563eb'):'#888',
+                boxShadow:mode===m?'0 1px 4px rgba(0,0,0,.1)':''}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="scroll" style={{padding:'14px 18px 36px'}}>
+
+          {/* ── RENT MODE ── */}
+          {mode==='rent'&&(
+            <>
+              <div style={{display:'flex',flexDirection:'column',gap:11}}>
+                <div>
+                  <label className="lbl">Monthly Rent *</label>
+                  {inp(rent, setRent, '25000')}
+                </div>
+                <div>
+                  <label className="lbl" style={{display:'flex',alignItems:'center'}}>
+                    Security Deposit
+                    {+rent>0&&<Hint label="2 months" val={fmt((+rent)*2)} onClick={()=>setDep(String((+rent)*2))}/>}
+                    {+rent>0&&<Hint label="3 months" val={fmt((+rent)*3)} onClick={()=>setDep(String((+rent)*3))}/>}
+                  </label>
+                  {inp(deposit, setDep, 'Usually 2–3 months rent')}
+                </div>
+                <div>
+                  <label className="lbl" style={{display:'flex',alignItems:'center'}}>
+                    Brokerage
+                    {+rent>0&&<Hint label="1 month" val={fmt(+rent)} onClick={()=>setBRent(String(+rent))}/>}
+                  </label>
+                  {inp(brokRent, setBRent, '0 if direct from owner')}
+                </div>
+                <div>
+                  <label className="lbl">Monthly Maintenance / Society</label>
+                  {inp(maint, setMaint, '2000')}
+                </div>
+                <div>
+                  <label className="lbl">Furnishing / Setup (one-time)</label>
+                  {inp(setup, setSetup, '0 if furnished')}
+                </div>
+              </div>
+
+              {/* Rent results */}
+              {hasBudget&&(
+                <div style={{marginTop:20,background:'#f8fafc',borderRadius:12,padding:'14px 16px',border:'1px solid #e5e7eb'}}>
+                  <div style={{fontSize:11,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:4}}>Cost Breakdown</div>
+                  <Row label="First month rent"                     val={`₹${(+rent||0).toLocaleString()}`}/>
+                  <Row label="Security deposit"                     val={`₹${(+deposit||0).toLocaleString()}`}/>
+                  <Row label="Brokerage"                            val={`₹${(+brokRent||0).toLocaleString()}`}/>
+                  {+setup>0&&<Row label="Setup / furnishing"        val={`₹${(+setup||0).toLocaleString()}`}/>}
+                  <Row label="Move-in day total" val={fmt(rr.upfront)} bold accent="#e85d26" border/>
+                  <div style={{height:8}}/>
+                  <Row label="Monthly outflow (rent + maintenance)" val={fmt(rr.monthly)}/>
+                  <Row label="6-month total cost"                   val={fmt(rr.total6m)}/>
+                  <Row label="  → effective per month"             val={fmt(rr.effMonthly6m)} accent="#7c3aed"/>
+                  <Row label="12-month total cost"                  val={fmt(rr.total12m)} bold border/>
+                  <Row label="  → effective per month"             val={fmt(rr.effMonthly12m)} bold accent="#7c3aed"/>
+                  {rr.effMonthly12m>(+rent)&&(
+                    <div style={{marginTop:10,background:'#fef3ee',borderRadius:8,padding:'8px 10px',fontSize:12,color:'#c45319'}}>
+                      💡 All-in, you're paying <strong>{fmt(rr.effMonthly12m)}/mo</strong> — {Math.round(((rr.effMonthly12m/(+rent))-1)*100)}% more than the headline rent
+                    </div>
+                  )}
+                </div>
+              )}
+              {!hasBudget&&<div style={{marginTop:20,textAlign:'center',color:'#9ca3af',fontSize:13,padding:'20px 0'}}>Enter monthly rent to see your true cost breakdown</div>}
+            </>
+          )}
+
+          {/* ── BUY MODE ── */}
+          {mode==='buy'&&(
+            <>
+              <div style={{display:'flex',flexDirection:'column',gap:11}}>
+                <div>
+                  <label className="lbl">Purchase Price *</label>
+                  {inp(price, setPrice, '7500000')}
+                  {+price>0&&<div style={{fontSize:11,color:'#2563eb',marginTop:3,fontWeight:600}}>{fmt(+price)}</div>}
+                </div>
+                <div>
+                  <label className="lbl" style={{display:'flex',alignItems:'center'}}>
+                    Brokerage
+                    {+price>0&&<Hint label="2%" val={fmt((+price)*.02)} onClick={()=>setBBuy(String(Math.round((+price)*.02)))}/>}
+                    {+price>0&&<Hint label="1%" val={fmt((+price)*.01)} onClick={()=>setBBuy(String(Math.round((+price)*.01)))}/>}
+                  </label>
+                  {inp(brokBuy, setBBuy, '0 if direct from builder/owner')}
+                </div>
+                <div>
+                  <label className="lbl" style={{display:'flex',alignItems:'center'}}>
+                    Stamp Duty
+                    {+price>0&&<Hint label="Delhi 6%" val={fmt((+price)*.06)} onClick={()=>setStamp(String(Math.round((+price)*.06)))}/>}
+                    {+price>0&&<Hint label="HR/UP 7%" val={fmt((+price)*.07)} onClick={()=>setStamp(String(Math.round((+price)*.07)))}/>}
+                  </label>
+                  {inp(stamp, setStamp, 'Delhi ~6% · Gurgaon/Noida ~7%')}
+                </div>
+                <div>
+                  <label className="lbl" style={{display:'flex',alignItems:'center'}}>
+                    Registration Charges
+                    {+price>0&&<Hint label="~1%" val={fmt((+price)*.01)} onClick={()=>setReg(String(Math.round((+price)*.01)))}/>}
+                  </label>
+                  {inp(reg, setReg, '~1% of price, paid at sub-registrar')}
+                </div>
+                <div>
+                  <label className="lbl">Legal / Documentation</label>
+                  {inp(legal, setLegal, '10000')}
+                </div>
+                <div>
+                  <label className="lbl">Interiors / Renovation (one-time)</label>
+                  {inp(intCost, setInt, '0')}
+                </div>
+                <div>
+                  <label className="lbl">Loan processing / misc</label>
+                  {inp(misc, setMisc, '0')}
+                </div>
+              </div>
+
+              {/* Buy results */}
+              {hasBudget&&(
+                <div style={{marginTop:20,background:'#f8fafc',borderRadius:12,padding:'14px 16px',border:'1px solid #e5e7eb'}}>
+                  <div style={{fontSize:11,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:4}}>Acquisition Cost Breakdown</div>
+                  <Row label="Base purchase price"            val={fmt(br.basePrice)}/>
+                  {+brokBuy>0 &&<Row label="Brokerage"       val={`₹${(+brokBuy).toLocaleString()}`}/>}
+                  {+stamp>0   &&<Row label="Stamp duty"       val={`₹${(+stamp).toLocaleString()}`}/>}
+                  {+reg>0     &&<Row label="Registration"     val={`₹${(+reg).toLocaleString()}`}/>}
+                  {+legal>0   &&<Row label="Legal / docs"     val={`₹${(+legal).toLocaleString()}`}/>}
+                  {+intCost>0 &&<Row label="Interiors"        val={`₹${(+intCost).toLocaleString()}`}/>}
+                  {+misc>0    &&<Row label="Loan / misc"      val={`₹${(+misc).toLocaleString()}`}/>}
+                  <Row label="Additional costs beyond price"  val={fmt(br.extras)} accent="#e85d26" border/>
+                  <Row label="Total acquisition cost"         val={fmt(br.total)} bold accent="#2563eb" border/>
+                  {br.overagePct>0&&(
+                    <div style={{marginTop:10,background:'#eff6ff',borderRadius:8,padding:'8px 10px',fontSize:12,color:'#1d4ed8'}}>
+                      💡 You're paying <strong>{br.overagePct}% more</strong> than the headline price — {fmt(br.extras)} in hidden costs
+                    </div>
+                  )}
+                </div>
+              )}
+              {!hasBudget&&<div style={{marginTop:20,textAlign:'center',color:'#9ca3af',fontSize:13,padding:'20px 0'}}>Enter the purchase price to see your true acquisition cost</div>}
+            </>
+          )}
+
+          <div style={{marginTop:16,fontSize:11,color:'#d1d5db',textAlign:'center',lineHeight:1.6}}>
+            Estimates only. Consult a professional for exact figures.<br/>
+            Stamp duty rates may vary by gender, property type &amp; state.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function NCRRealty({ initialPins=[] }) {
   const [pins,setPins]         = useState(initialPins);
@@ -2164,6 +2405,8 @@ export default function NCRRealty({ initialPins=[] }) {
   const [showHow,setShowHow]   = useState(false);
   const [showFH,setShowFH]     = useState(false);
   const [showWizard,setWizard] = useState(false);
+  const [showCalc,setShowCalc] = useState(false);
+  const [calcPin,setCalcPin]   = useState(null);  // pin to prefill calculator with
   const [fhDropMode,setFhDrop] = useState(false);  // waiting for user to tap map for flat hunt
   const [fhCoords,setFhCoords] = useState(null);   // captured flat hunt location
   const [fhAreaName,setFhArea] = useState('');
@@ -2400,6 +2643,12 @@ export default function NCRRealty({ initialPins=[] }) {
             🎯
           </button>
 
+          <button className={'rail-btn'+(showCalc?' active':'')}
+            data-tip="Hidden cost calculator"
+            onClick={()=>{setCalcPin(null);setShowCalc(c=>!c);}}>
+            🧮
+          </button>
+
           <button className={'rail-btn'+(showMetro?' active':'')}
             data-tip="Toggle metro lines"
             onClick={()=>setMetro(m=>!m)}>
@@ -2517,9 +2766,10 @@ export default function NCRRealty({ initialPins=[] }) {
       {showHow     &&<HowToUse onClose={()=>setShowHow(false)}/>}
       {showFH      &&<FlatHuntSheet onClose={()=>setShowFH(false)} onRequestMapDrop={()=>{setShowFH(false);setFhDrop(true);}} pendingCoords={fhCoords} pendingAreaName={fhAreaName}/>}
       {showWizard  &&<BudgetWizard pins={pins} onClose={()=>setWizard(false)} onFlyTo={v=>setFlyTo({...v,ts:Date.now()})} onApplyFilters={f=>{setFilters(f);}}/>}
+      {showCalc    &&<HiddenCostCalc onClose={()=>{setShowCalc(false);setCalcPin(null);}} prefillPin={calcPin}/>}
       {showExplore&&isMobile&&<ExplorePanel pins={pins} loading={loading} filters={filters} onPinClick={p=>{setSelPin(p);const _c=pinCoords(p);if(_c)setFlyTo({lat:_c.lat,lng:_c.lng,zoom:_c.exact?17:14,ts:Date.now()});}} onFlyTo={v=>setFlyTo({...v,ts:Date.now()})} onClose={()=>setShowE(false)} isMobile={true}/>}
       {showForm    &&<PinForm onSubmit={addPin} onClose={closeForm} defaultMode={formMode} prefLat={dropLat} prefLng={dropLng}/>}
-      {selPin      &&<PinDetail pin={selPin} onClose={()=>setSelPin(null)} onUpvote={upvote} onFlyTo={p=>{setFlyTo({...p,ts:Date.now()});setSelPin(null);}}/>}
+      {selPin      &&<PinDetail pin={selPin} onClose={()=>setSelPin(null)} onUpvote={upvote} onFlyTo={p=>{setFlyTo({...p,ts:Date.now()});setSelPin(null);}} onCalc={p=>{setCalcPin(p);setShowCalc(true);}}/>}
     </>
   );
 }
