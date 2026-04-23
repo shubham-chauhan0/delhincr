@@ -170,6 +170,104 @@ const tAgo = ts => { if(!ts)return''; const d=Math.floor((Date.now()-new Date(ts
 const rCol = r => !r?'#9ca3af': r<20000?'#16a34a': r<40000?'#ca8a04': r<70000?'#ea580c': r<120000?'#dc2626':'#7c2d12';
 const pCol = p => !p?'#9ca3af': p<5e6?'#16a34a': p<1e7?'#ca8a04': p<2e7?'#ea580c': p<5e7?'#dc2626':'#7c2d12';
 const aOf  = id => AREAS.find(a=>a.id===id);
+
+// ─── Wizard scoring helpers ───────────────────────────────────────────────────
+// Haversine distance in km between two lat/lng points
+function haversineKm(lat1,lng1,lat2,lng2){
+  const R=6371, dLat=(lat2-lat1)*Math.PI/180, dLng=(lng2-lng1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+// Nearest metro station distance in km (checks all polyline points across all lines)
+function nearestMetroKm(lat,lng){
+  let min=Infinity;
+  METRO.forEach(line=>line.pts.forEach(([mlat,mlng])=>{ const d=haversineKm(lat,lng,mlat,mlng); if(d<min)min=d; }));
+  return +min.toFixed(1);
+}
+// Score a single area for the wizard (pure function — no side effects)
+// Returns null if the area has no relevant data for this intent
+// Scoring breakdown (max 100):
+//   budget_fit   0-40  — how well avg price matches budget
+//   data_density 0-20  — number of pins (trust signal)
+//   metro_prox   0-20  — proximity to nearest metro line point
+//   availability 0-10  — available flats right now
+//   bhk_match    0-10  — area has pins for preferred BHK
+// TODO: add commute_score once commute time data is available
+function scoreAreaWizard(area, allPins, prefs){
+  const { intent, budget, bhk, wantMetro, tenantType, furnished } = prefs;
+  const areaPins = allPins.filter(p=>p.area_id===area.id && p.mode===intent);
+  if(!areaPins.length) return null;
+
+  const vals = intent==='rent'
+    ? areaPins.map(p=>p.rent).filter(Boolean)
+    : areaPins.map(p=>p.price).filter(Boolean);
+  const avgVal = avg(vals);
+  if(!avgVal) return null;
+
+  let score=0;
+
+  // 1. Budget fit (0-40)
+  if(budget){
+    const r=avgVal/budget;
+    if(r<=0.75)      score+=30;
+    else if(r<=0.90) score+=40;  // sweet spot — fits comfortably
+    else if(r<=1.00) score+=32;
+    else if(r<=1.10) score+=14;
+    else if(r<=1.25) score+=4;
+    // else 0 — significantly over budget
+  } else { score+=25; }
+
+  // 2. Data density (0-20)
+  score += Math.min(areaPins.length*3, 20);
+
+  // 3. Metro proximity (0-20)
+  const metroKm = nearestMetroKm(area.lat, area.lng);
+  const metroPts = Math.max(0, 20-Math.round(metroKm*3));
+  score += metroPts;
+  if(wantMetro==='yes' && metroKm>4) score -= 12; // hard penalty if metro required but far
+
+  // 4. Available flats (0-10)
+  const availCount = areaPins.filter(p=>p.is_available).length;
+  score += Math.min(availCount*4, 10);
+
+  // 5. BHK match (0-10)
+  if(intent==='rent' && bhk && bhk!=='any'){
+    if(areaPins.some(p=>p.bhk===bhk)) score+=10;
+  } else if(intent==='buy'){ score+=5; } // no BHK penalty for buy
+
+  // 6. Tenant type (soft bonus, 0-5) — TODO: enrich if schema adds tenant_friendly field
+  if(intent==='rent' && tenantType && tenantType!=='any'){
+    if(areaPins.some(p=>p.tenant_type===tenantType||p.tenant_type==='Any')) score+=5;
+  }
+
+  // Clamp to 100
+  score = Math.max(0, Math.min(100, score));
+
+  // Affordability label
+  let label='', labelColor='#6b7280';
+  if(budget){
+    const r=avgVal/budget;
+    if(r<=0.75)      { label='Budget-friendly'; labelColor='#16a34a'; }
+    else if(r<=0.92) { label='Good value';      labelColor='#2563eb'; }
+    else if(r<=1.02) { label='Fits budget';     labelColor='#7c3aed'; }
+    else if(r<=1.15) { label='Slightly over';   labelColor='#ca8a04'; }
+    else             { label='Above budget';    labelColor='#dc2626'; }
+  }
+
+  // BHK breakdown present in this area (for display)
+  const bhksPresent = [...new Set(areaPins.map(p=>p.bhk).filter(Boolean))].sort();
+
+  // "Why" explanation — pick 1-2 best reasons
+  const reasons=[];
+  if(budget && avgVal/budget<=0.92) reasons.push(`Avg ${intent==='rent'?fmtR(avgVal)+'/mo':fmtP(avgVal)} fits your budget`);
+  if(metroKm<1.5)      reasons.push('Walking distance to metro');
+  else if(metroKm<3)   reasons.push(`~${metroKm}km from metro`);
+  if(availCount>0)     reasons.push(`${availCount} flat${availCount>1?'s':''} available now`);
+  if(areaPins.length>=5&&!reasons.length) reasons.push(`${areaPins.length} verified data points`);
+  if(!reasons.length)  reasons.push(`${areaPins.length} pin${areaPins.length>1?'s':''} in this area`);
+
+  return { area, score, avgVal, pinCount:areaPins.length, availCount, metroKm, label, labelColor, reasons, bhksPresent };
+}
 // Find area by pin - checks id first, then name match for custom pins
 const aOfPin = pin => aOf(pin.area_id) || AREAS.find(a=>
   pin.area_name && a.name.toLowerCase() === pin.area_name.toLowerCase()
@@ -1755,6 +1853,306 @@ function FlatHuntSheet({ onClose, onRequestMapDrop, pendingCoords, pendingAreaNa
   );
 }
 
+// ─── Budget Wizard ────────────────────────────────────────────────────────────
+function BudgetWizard({ pins, onClose, onFlyTo, onApplyFilters }) {
+  const [step, setStep]     = useState(0); // 0=intent, 1=prefs, 2=results
+  const [intent, setIntent] = useState('rent');
+  const [budget, setBudget] = useState('');
+  const [bhk, setBhk]       = useState('any');
+  const [wantMetro, setWM]  = useState('any');
+  const [tenantType, setTT] = useState('any');
+  const [furnished, setFurn]= useState('any');
+  const [results, setRes]   = useState([]);
+
+  const RENT_BUDGETS = [['10K',10000],['15K',15000],['20K',20000],['30K',30000],['40K',40000],['60K',60000],['80K',80000],['1L+',100000]];
+  const BUY_BUDGETS  = [['30L',3e6],['50L',5e6],['75L',7.5e6],['1Cr',1e7],['1.5Cr',1.5e7],['2Cr',2e7],['3Cr',3e7],['5Cr+',5e7]];
+  const budgetPresets = intent==='rent' ? RENT_BUDGETS : BUY_BUDGETS;
+
+  const compute = () => {
+    const prefs = { intent, budget:+budget||0, bhk, wantMetro, tenantType, furnished };
+    const scored = AREAS
+      .map(area => scoreAreaWizard(area, pins, prefs))
+      .filter(Boolean)
+      .sort((a,b) => b.score - a.score)
+      .slice(0, 8);
+    setRes(scored);
+    setStep(2);
+  };
+
+  const selectPreset = (val) => {
+    // toggle off if same
+    setBudget(prev => prev===String(val)?'':String(val));
+  };
+
+  const Chip = ({label, active, onClick, color}) => (
+    <button onClick={onClick} style={{
+      padding:'6px 13px', borderRadius:99, fontSize:12, fontWeight:600, cursor:'pointer',
+      border:`1.5px solid ${active?(color||'#111'):'#e5e7eb'}`,
+      background:active?(color?color+'15':'#f0f0f0'):'#fff',
+      color:active?(color||'#111'):'#6b7280',
+    }}>{label}</button>
+  );
+
+  const closeBtn = (
+    <button onClick={onClose} style={{width:30,height:30,borderRadius:'50%',border:'1.5px solid #e5e7eb',background:'#f9fafb',cursor:'pointer',fontSize:16,color:'#888',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>×</button>
+  );
+
+  return (
+    <div className="overlay fi" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div className="sheet su" style={{maxHeight:'90dvh'}}>
+        <div className="handle"/>
+
+        {/* ── Step 0: Intent ── */}
+        {step===0&&(
+          <>
+            <div className="sh-head" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontWeight:800,fontSize:17,color:'#111'}}>🎯 Best Areas for You</div>
+                <div style={{fontSize:12,color:'#9ca3af',marginTop:2}}>Rank areas by your budget & preferences</div>
+              </div>
+              {closeBtn}
+            </div>
+            <div className="scroll" style={{padding:'24px 20px 36px'}}>
+              <div style={{fontSize:13,fontWeight:700,color:'#374151',marginBottom:12}}>What are you looking for?</div>
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                {[['rent','🏠 Renting a flat','Find areas where monthly rents fit your budget'],
+                  ['buy', '🏢 Buying property','Find areas with buy prices in your range']].map(([v,title,desc])=>(
+                  <button key={v} onClick={()=>{setIntent(v);setStep(1);}} style={{
+                    padding:'16px 18px', borderRadius:13, border:`2px solid ${intent===v?'#111':'#e5e7eb'}`,
+                    background:intent===v?'#f9fafb':'#fff', cursor:'pointer', textAlign:'left',
+                  }}>
+                    <div style={{fontWeight:700,fontSize:14,marginBottom:3,color:'#111'}}>{title}</div>
+                    <div style={{fontSize:12,color:'#6b7280',lineHeight:1.5}}>{desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Step 1: Preferences ── */}
+        {step===1&&(
+          <>
+            <div className="sh-head" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{display:'flex',alignItems:'center',gap:9}}>
+                <button onClick={()=>setStep(0)} style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'#6b7280',padding:'2px 4px'}}>←</button>
+                <div>
+                  <div style={{fontWeight:800,fontSize:16,color:'#111'}}>{intent==='rent'?'🏠 Rent Preferences':'🏢 Buy Preferences'}</div>
+                  <div style={{fontSize:11,color:'#9ca3af',marginTop:1}}>Set your filters to find matching areas</div>
+                </div>
+              </div>
+              {closeBtn}
+            </div>
+            <div className="scroll" style={{padding:'18px 20px 36px',display:'flex',flexDirection:'column',gap:18}}>
+
+              {/* Budget */}
+              <div>
+                <div className="lbl" style={{marginBottom:8}}>
+                  {intent==='rent'?'Max Monthly Rent':'Budget (Total Price)'}
+                </div>
+                <div style={{position:'relative',marginBottom:10}}>
+                  <span style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:14,color:'#9ca3af',fontFamily:'DM Mono,monospace'}}>₹</span>
+                  <input type="number" className="inp" style={{paddingLeft:26}}
+                    placeholder={intent==='rent'?'e.g. 30000':'e.g. 7500000'}
+                    value={budget} onChange={e=>setBudget(e.target.value)}/>
+                </div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                  {budgetPresets.map(([label,val])=>(
+                    <Chip key={label} label={label} active={budget===String(val)} onClick={()=>selectPreset(val)}/>
+                  ))}
+                </div>
+              </div>
+
+              {/* BHK — rent only */}
+              {intent==='rent'&&(
+                <div>
+                  <div className="lbl">BHK Preference</div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {[['any','Any'],...BHK.map(b=>[b,b])].map(([v,l])=>(
+                      <Chip key={v} label={l} active={bhk===v} onClick={()=>setBhk(v)} color="#e85d26"/>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Metro proximity */}
+              <div>
+                <div className="lbl">Metro proximity</div>
+                <div style={{display:'flex',gap:6}}>
+                  {[['any','No preference'],['yes','Near metro'],['no','Not important']].map(([v,l])=>(
+                    <Chip key={v} label={l} active={wantMetro===v} onClick={()=>setWM(v)} color="#7c3aed"/>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tenant type — rent only */}
+              {intent==='rent'&&(
+                <div>
+                  <div className="lbl">Looking as</div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {[['any','Any'],...TENANTS.map(t=>[t,t])].map(([v,l])=>(
+                      <Chip key={v} label={l} active={tenantType===v} onClick={()=>setTT(v)}/>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Furnishing — rent only */}
+              {intent==='rent'&&(
+                <div>
+                  <div className="lbl">Furnishing</div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {[['any','Any'],...FURNISH.map(f=>[f,f])].map(([v,l])=>(
+                      <Chip key={v} label={l} active={furnished===v} onClick={()=>setFurn(v)} color="#ca8a04"/>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button onClick={compute} style={{
+                width:'100%',padding:'14px',borderRadius:11,border:'none',
+                background:'#111',color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',marginTop:4,
+              }}>
+                Find best areas →
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── Step 2: Results ── */}
+        {step===2&&(
+          <>
+            <div className="sh-head" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{display:'flex',alignItems:'center',gap:9}}>
+                <button onClick={()=>setStep(1)} style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'#6b7280',padding:'2px 4px'}}>←</button>
+                <div>
+                  <div style={{fontWeight:800,fontSize:16,color:'#111'}}>
+                    {results.length ? `${results.length} areas match` : 'No matches found'}
+                  </div>
+                  <div style={{fontSize:11,color:'#9ca3af',marginTop:1}}>
+                    {budget ? `Budget: ${intent==='rent'?fmtR(+budget):fmtP(+budget)}` : 'All budgets'}
+                    {bhk!=='any'&&intent==='rent'? ` · ${bhk}`:''}
+                    {wantMetro==='yes'?' · Near metro':''}
+                  </div>
+                </div>
+              </div>
+              {closeBtn}
+            </div>
+            <div className="scroll" style={{padding:'8px 14px 36px'}}>
+
+              {results.length===0&&(
+                <div style={{textAlign:'center',padding:'40px 20px'}}>
+                  <div style={{fontSize:32,marginBottom:12}}>🔍</div>
+                  <div style={{fontWeight:700,fontSize:15,color:'#111',marginBottom:8}}>No data for these filters yet</div>
+                  <div style={{fontSize:13,color:'#6b7280',lineHeight:1.7,marginBottom:20}}>Not enough community pins in this price range yet. Be the first to add data!</div>
+                  <button onClick={()=>setStep(1)} style={{padding:'10px 20px',borderRadius:10,border:'1.5px solid #e5e7eb',background:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,color:'#374151'}}>← Adjust filters</button>
+                </div>
+              )}
+
+              {results.map((r,i)=>{
+                const cityLabel = CITIES[r.area.city]?.label||r.area.city;
+                const isRent = intent==='rent';
+                const valColor = isRent?rCol(r.avgVal):pCol(r.avgVal);
+                return (
+                  <div key={r.area.id} style={{
+                    background:'#fff', border:'1.5px solid #e5e7eb', borderRadius:14,
+                    padding:'14px 14px 12px', marginBottom:10,
+                    boxShadow:'0 1px 6px rgba(0,0,0,.06)',
+                  }}>
+                    {/* Header row */}
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:2}}>
+                          <span style={{fontWeight:800,fontSize:15,color:'#111'}}>{r.area.name}</span>
+                          <span style={{fontSize:10,color:'#9ca3af',background:'#f3f4f6',padding:'1px 6px',borderRadius:99,flexShrink:0}}>{cityLabel}</span>
+                          {i===0&&<span style={{fontSize:10,fontWeight:700,color:'#166534',background:'#dcfce7',padding:'1px 7px',borderRadius:99,flexShrink:0}}>Top pick</span>}
+                        </div>
+                        {/* Why recommended */}
+                        <div style={{fontSize:11.5,color:'#6b7280',lineHeight:1.5}}>{r.reasons.slice(0,2).join(' · ')}</div>
+                      </div>
+                      {/* Affordability label */}
+                      {r.label&&(
+                        <span style={{fontSize:10,fontWeight:700,color:r.labelColor,background:r.labelColor+'15',border:`1px solid ${r.labelColor}33`,padding:'3px 8px',borderRadius:99,flexShrink:0,marginLeft:8}}>
+                          {r.label}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Stats row */}
+                    <div style={{display:'flex',gap:14,marginBottom:10,flexWrap:'wrap'}}>
+                      <div>
+                        <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em'}}>Avg {isRent?'rent':'price'}</div>
+                        <div style={{fontFamily:'DM Mono,monospace',fontSize:16,fontWeight:800,color:valColor,marginTop:1}}>
+                          {isRent?fmtR(r.avgVal):fmtP(r.avgVal)}{isRent?'/mo':''}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em'}}>Data points</div>
+                        <div style={{fontSize:14,fontWeight:700,color:'#374151',marginTop:1}}>{r.pinCount} pin{r.pinCount>1?'s':''}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em'}}>Metro</div>
+                        <div style={{fontSize:14,fontWeight:700,color:r.metroKm<2?'#7c3aed':'#374151',marginTop:1}}>
+                          {r.metroKm<1?'<1km':`${r.metroKm}km`}
+                        </div>
+                      </div>
+                      {r.availCount>0&&(
+                        <div>
+                          <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em'}}>Available</div>
+                          <div style={{fontSize:14,fontWeight:700,color:'#16a34a',marginTop:1}}>{r.availCount} now</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* BHK row if rent */}
+                    {isRent&&r.bhksPresent.length>0&&(
+                      <div style={{display:'flex',gap:5,marginBottom:10,flexWrap:'wrap'}}>
+                        {r.bhksPresent.map(b=>(
+                          <span key={b} style={{fontSize:10,fontWeight:600,padding:'2px 7px',borderRadius:99,background:bhk===b?'#e85d2615':'#f3f4f6',color:bhk===b?'#e85d26':'#6b7280',border:`1px solid ${bhk===b?'#e85d2633':'#e5e7eb'}`}}>{b}</span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* CTAs */}
+                    <div style={{display:'flex',gap:7}}>
+                      <button onClick={()=>{
+                        onFlyTo({lat:r.area.lat,lng:r.area.lng,zoom:14,ts:Date.now()});
+                        onClose();
+                      }} style={{flex:1,padding:'8px',borderRadius:9,border:'1.5px solid #e5e7eb',background:'#fff',cursor:'pointer',fontSize:12,fontWeight:600,color:'#374151'}}>
+                        🗺 View on map
+                      </button>
+                      <a href={`/area/${r.area.id}`} style={{flex:1,padding:'8px',borderRadius:9,border:'none',background:'#111',cursor:'pointer',fontSize:12,fontWeight:600,color:'#fff',textDecoration:'none',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        Explore area →
+                      </a>
+                      {r.availCount>0&&(
+                        <button onClick={()=>{
+                          onApplyFilters({mode:'rent',bhk:'all',city:r.area.city,furnished:'all',minRent:'',maxRent:'',avail:true});
+                          onFlyTo({lat:r.area.lat,lng:r.area.lng,zoom:14,ts:Date.now()});
+                          onClose();
+                        }} style={{padding:'8px',borderRadius:9,border:'1.5px solid #16a34a',background:'#f0fdf4',cursor:'pointer',fontSize:11,fontWeight:700,color:'#16a34a',flexShrink:0}}>
+                          ✅ {r.availCount}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {results.length>0&&(
+                <div style={{textAlign:'center',padding:'8px 0 4px'}}>
+                  <button onClick={()=>setStep(1)} style={{fontSize:12,color:'#6b7280',background:'none',border:'none',cursor:'pointer',textDecoration:'underline'}}>
+                    Adjust filters
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function NCRRealty({ initialPins=[] }) {
   const [pins,setPins]         = useState(initialPins);
@@ -1765,6 +2163,7 @@ export default function NCRRealty({ initialPins=[] }) {
   const [showFilter,setShowF]  = useState(false);
   const [showHow,setShowHow]   = useState(false);
   const [showFH,setShowFH]     = useState(false);
+  const [showWizard,setWizard] = useState(false);
   const [fhDropMode,setFhDrop] = useState(false);  // waiting for user to tap map for flat hunt
   const [fhCoords,setFhCoords] = useState(null);   // captured flat hunt location
   const [fhAreaName,setFhArea] = useState('');
@@ -1995,6 +2394,12 @@ export default function NCRRealty({ initialPins=[] }) {
             🏠
           </button>
 
+          <button className={'rail-btn'+(showWizard?' active':'')}
+            data-tip="Best areas for budget"
+            onClick={()=>setWizard(w=>!w)}>
+            🎯
+          </button>
+
           <button className={'rail-btn'+(showMetro?' active':'')}
             data-tip="Toggle metro lines"
             onClick={()=>setMetro(m=>!m)}>
@@ -2043,25 +2448,34 @@ export default function NCRRealty({ initialPins=[] }) {
         </div>
       </div>
 
-      {/* ── Find Flat CTA pill (above legend on desktop, above mobile bar on mobile) ── */}
+      {/* ── Bottom CTA pill: Find Flat | Best Areas ── */}
       {!fhDropMode&&(
-        <div onClick={()=>setShowFH(true)} style={{
+        <div style={{
           position:'fixed',
           bottom: isMobile ? 80 : 24,
           left: '50%', transform:'translateX(-50%)',
           zIndex:490,
           background:'rgba(255,255,255,.97)',border:'1.5px solid #e5e7eb',
-          borderRadius:14,padding:'10px 18px',
-          display:'flex',alignItems:'center',gap:12,
-          cursor:'pointer',whiteSpace:'nowrap',
+          borderRadius:14,
+          display:'flex',alignItems:'stretch',
           boxShadow:'0 4px 16px rgba(0,0,0,.12)',
           backdropFilter:'blur(8px)',
-          transition:'box-shadow .15s',
+          overflow:'hidden',
+          whiteSpace:'nowrap',
         }}>
-          <span style={{fontSize:16}}>🏠</span>
-          <div>
-            <div style={{fontSize:13,fontWeight:700,color:'#111'}}>Find Flat or Tenants</div>
-            <div style={{fontSize:11,color:'#9ca3af',marginTop:1}}>Broker-free · tap to start →</div>
+          <div onClick={()=>setShowFH(true)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 16px',cursor:'pointer',borderRight:'1px solid #e5e7eb'}}>
+            <span style={{fontSize:15}}>🏠</span>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:'#111'}}>Find Flat</div>
+              <div style={{fontSize:10,color:'#9ca3af'}}>Broker-free</div>
+            </div>
+          </div>
+          <div onClick={()=>setWizard(true)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 16px',cursor:'pointer'}}>
+            <span style={{fontSize:15}}>🎯</span>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:'#111'}}>Best Areas</div>
+              <div style={{fontSize:10,color:'#9ca3af'}}>For your budget</div>
+            </div>
           </div>
         </div>
       )}
@@ -2102,6 +2516,7 @@ export default function NCRRealty({ initialPins=[] }) {
       {showOnboard&&<OnboardingModal onClose={()=>setOnboard(false)} onContribute={()=>{setTab('contribute');}}/>}
       {showHow     &&<HowToUse onClose={()=>setShowHow(false)}/>}
       {showFH      &&<FlatHuntSheet onClose={()=>setShowFH(false)} onRequestMapDrop={()=>{setShowFH(false);setFhDrop(true);}} pendingCoords={fhCoords} pendingAreaName={fhAreaName}/>}
+      {showWizard  &&<BudgetWizard pins={pins} onClose={()=>setWizard(false)} onFlyTo={v=>setFlyTo({...v,ts:Date.now()})} onApplyFilters={f=>{setFilters(f);}}/>}
       {showExplore&&isMobile&&<ExplorePanel pins={pins} loading={loading} filters={filters} onPinClick={p=>{setSelPin(p);const _c=pinCoords(p);if(_c)setFlyTo({lat:_c.lat,lng:_c.lng,zoom:_c.exact?17:14,ts:Date.now()});}} onFlyTo={v=>setFlyTo({...v,ts:Date.now()})} onClose={()=>setShowE(false)} isMobile={true}/>}
       {showForm    &&<PinForm onSubmit={addPin} onClose={closeForm} defaultMode={formMode} prefLat={dropLat} prefLng={dropLng}/>}
       {selPin      &&<PinDetail pin={selPin} onClose={()=>setSelPin(null)} onUpvote={upvote} onFlyTo={p=>{setFlyTo({...p,ts:Date.now()});setSelPin(null);}}/>}
