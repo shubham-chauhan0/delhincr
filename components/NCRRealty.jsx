@@ -122,6 +122,38 @@ const AIRPORTS = [
   { name:'Hindon Airport', lat:28.6947, lng:77.4285, code:'HDO' },
 ];
 
+// ─── Searchable locations: AREAS + airports + key metro stations / landmarks ──
+// Used by LocationSearch — no external API, fully offline
+const SEARCH_LOCS = [
+  ...AREAS.map(a=>({ name:a.name, sub:(CITIES[a.city]?.label||'Delhi NCR'), lat:a.lat, lng:a.lng, type:'area',     zoom:14 })),
+  { name:'IGI Airport',              sub:'New Delhi',         lat:28.5562, lng:77.1000, type:'airport',  zoom:14 },
+  { name:'Hindon Airport',           sub:'Ghaziabad',         lat:28.6947, lng:77.4285, type:'airport',  zoom:14 },
+  { name:'Rajiv Chowk Metro',        sub:'Central Delhi',     lat:28.6315, lng:77.2167, type:'metro',    zoom:15 },
+  { name:'Kashmere Gate Metro',      sub:'North Delhi',       lat:28.6676, lng:77.2281, type:'metro',    zoom:15 },
+  { name:'Huda City Centre Metro',   sub:'Gurgaon',           lat:28.4590, lng:77.1570, type:'metro',    zoom:15 },
+  { name:'AIIMS Metro',              sub:'South Delhi',       lat:28.5681, lng:77.2090, type:'metro',    zoom:15 },
+  { name:'Saket Metro',              sub:'South Delhi',       lat:28.5244, lng:77.2066, type:'metro',    zoom:15 },
+  { name:'Chattarpur Metro',         sub:'South Delhi',       lat:28.5021, lng:77.1760, type:'metro',    zoom:15 },
+  { name:'Akshardham Metro',         sub:'East Delhi',        lat:28.6127, lng:77.2773, type:'metro',    zoom:15 },
+  { name:'Yamuna Bank Metro',        sub:'East Delhi',        lat:28.6326, lng:77.2892, type:'metro',    zoom:15 },
+  { name:'Botanical Garden Metro',   sub:'Noida',             lat:28.5625, lng:77.3360, type:'metro',    zoom:15 },
+  { name:'Dwarka Sector 21 Metro',   sub:'West Delhi',        lat:28.5537, lng:77.0795, type:'metro',    zoom:15 },
+  { name:'Uttam Nagar East Metro',   sub:'West Delhi',        lat:28.6213, lng:77.0557, type:'metro',    zoom:15 },
+  { name:'Netaji Subhash Place',     sub:'North Delhi',       lat:28.6988, lng:77.1550, type:'metro',    zoom:15 },
+  { name:'Inderlok Metro',           sub:'North West Delhi',  lat:28.6804, lng:77.1324, type:'metro',    zoom:15 },
+  { name:'Central Secretariat',      sub:'Central Delhi',     lat:28.6138, lng:77.2122, type:'metro',    zoom:15 },
+  { name:'Noida Sector 52 Metro',    sub:'Noida',             lat:28.6070, lng:77.3683, type:'metro',    zoom:15 },
+  { name:'Electronic City Metro',    sub:'Noida',             lat:28.6269, lng:77.3769, type:'metro',    zoom:15 },
+  { name:'Dilshad Garden Metro',     sub:'East Delhi',        lat:28.6677, lng:77.2746, type:'metro',    zoom:15 },
+  { name:'India Gate',               sub:'Central Delhi',     lat:28.6129, lng:77.2295, type:'landmark', zoom:15 },
+  { name:'Khan Market',              sub:'Central Delhi',     lat:28.5993, lng:77.2266, type:'landmark', zoom:15 },
+  { name:'Chandni Chowk',            sub:'Old Delhi',         lat:28.6570, lng:77.2310, type:'landmark', zoom:15 },
+  { name:'Cyber City / DLF',         sub:'Gurgaon',           lat:28.4950, lng:77.0894, type:'landmark', zoom:15 },
+  { name:'Lodi Colony',              sub:'South Delhi',       lat:28.5905, lng:77.2193, type:'landmark', zoom:15 },
+  { name:'Sarojini Nagar Market',    sub:'South Delhi',       lat:28.5769, lng:77.1912, type:'landmark', zoom:15 },
+  { name:'Sector 29 Gurgaon',        sub:'Gurgaon',           lat:28.4735, lng:77.0586, type:'landmark', zoom:15 },
+];
+
 const BHK     = ['1RK','1BHK','2BHK','3BHK','4BHK','4BHK+'];
 const PTYPES  = ['Apartment / Flat','Independent House','Builder Floor','Villa','Penthouse','Plot / Land'];
 const FURNISH = ['Unfurnished','Semi-Furnished','Fully Furnished'];
@@ -314,11 +346,54 @@ body.fh-drop #map-root,body.fh-drop #map-root *{cursor:crosshair!important;}
 .si{animation:si .18s ease both;}
 .pu{animation:pu 1.5s ease infinite;}
 
+/* ── Location search bar ── */
+#loc-search-wrap{
+  position:fixed;top:60px;left:14px;
+  width:min(286px,calc(100vw - 28px));
+  z-index:650;
+}
+#loc-search-input{
+  width:100%;padding:8px 30px 8px 32px;
+  border:1.5px solid #e5e7eb;border-radius:10px;
+  font-size:13px;color:#111;background:rgba(255,255,255,.97);
+  outline:none;transition:border-color .15s,box-shadow .15s;
+  box-shadow:0 2px 10px rgba(0,0,0,.1);
+}
+#loc-search-input:focus{border-color:#111;box-shadow:0 2px 14px rgba(0,0,0,.14);}
+#loc-search-input::placeholder{color:#9ca3af;}
+.loc-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none;color:#9ca3af;}
+.loc-clear{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:15px;color:#9ca3af;padding:2px 3px;line-height:1;border-radius:4px;}
+.loc-clear:hover{color:#374151;}
+.loc-drop{
+  position:absolute;top:calc(100% + 4px);left:0;right:0;
+  background:#fff;border-radius:12px;border:1.5px solid #e5e7eb;
+  box-shadow:0 8px 28px rgba(0,0,0,.16);
+  overflow:hidden;max-height:312px;overflow-y:auto;
+  z-index:651;
+}
+.loc-item{
+  width:100%;padding:9px 12px;border:none;background:transparent;
+  cursor:pointer;text-align:left;display:flex;align-items:center;gap:9px;
+  border-bottom:1px solid #f3f4f6;transition:background .08s;
+}
+.loc-item:last-child{border-bottom:none;}
+.loc-item:hover,.loc-item.hi{background:#f3f4f6;}
+.loc-item-name{font-size:13px;font-weight:600;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.loc-item-sub{font-size:11px;color:#6b7280;margin-top:1px;}
+.loc-empty{padding:14px 12px;text-align:center;font-size:13px;color:#9ca3af;}
+
+@keyframes srchPulse{
+  0%  {transform:translate(-50%,-50%) scale(1);   opacity:.9;}
+  70% {transform:translate(-50%,-50%) scale(2.8); opacity:0;}
+  100%{transform:translate(-50%,-50%) scale(2.8); opacity:0;}
+}
+
 /* ── Responsive ── */
 @media(max-width:768px){
   .side-panel,#rail,.desk-only{display:none!important;}
   #mob-bar{display:flex!important;}
   .legend{bottom:78px!important;left:10px!important;}
+  #loc-search-wrap{width:calc(100vw - 28px);}
   .filter-float{
     top:auto!important;bottom:0!important;left:0!important;right:0!important;
     transform:none!important;width:100%!important;max-width:100%!important;
@@ -354,7 +429,7 @@ const GM_DARK_STYLE = [
 ];
 
 // ─── Map Component (Google Maps) ─────────────────────────────────────────────
-function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDropMode }) {
+function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDropMode, searchHL }) {
   const divRef    = useRef(null);
   const mapInst   = useRef(null);
   const markers   = useRef([]);
@@ -367,6 +442,7 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
   const fhRef     = useRef(fhDropMode);
   const modeRef   = useRef('explore');
   const bubbleFnRef = useRef(null);    // always-current ref to buildAreaBubbles
+  const searchMkr = useRef(null);      // temporary pulse marker for search highlight
 
   useEffect(()=>{ cbRef.current = onMapClick; },[onMapClick]);
   useEffect(()=>{ fhRef.current = fhDropMode; },[fhDropMode]);
@@ -586,7 +662,7 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
     const loadScript=(src,cb)=>{ const s=document.createElement('script');s.src=src;s.onload=cb;document.head.appendChild(s); };
 
     // Load Google Maps + marker library
-    loadScript(`https://maps.googleapis.com/maps/api/js?key=${key}&libraries=marker&v=weekly`, ()=>{
+    loadScript(`https://maps.googleapis.com/maps/api/js?key=${key}&libraries=marker,places&v=weekly`, ()=>{
       if(!divRef.current||mapInst.current) return;
       const G = window.google.maps;
 
@@ -696,6 +772,26 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
     mapInst.current.panTo({lat:flyTo.lat, lng:flyTo.lng});
     mapInst.current.setZoom(flyTo.zoom||16);
   },[flyTo]);
+
+  // Search highlight pulse marker
+  useEffect(()=>{
+    if(!searchHL||!mapInst.current||!window.google) return;
+    // Clear previous
+    if(searchMkr.current){ try{ searchMkr.current.map=null; }catch(e){} searchMkr.current=null; }
+    const G=window.google.maps;
+    const el=document.createElement('div');
+    el.style.cssText='position:relative;width:20px;height:20px;';
+    el.innerHTML=
+      '<div style="position:absolute;left:50%;top:50%;width:20px;height:20px;border-radius:50%;background:rgba(37,99,235,.22);border:2.5px solid #2563eb;transform:translate(-50%,-50%);animation:srchPulse 1.1s ease-out infinite;"></div>'
+      +'<div style="position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;background:#2563eb;transform:translate(-50%,-50%);"></div>';
+    searchMkr.current=new G.marker.AdvancedMarkerElement({
+      position:{lat:searchHL.lat,lng:searchHL.lng},
+      content:el,zIndex:600,map:mapInst.current,
+    });
+    // Auto-clear after 4s
+    const t=setTimeout(()=>{ try{ if(searchMkr.current) searchMkr.current.map=null; }catch(e){} searchMkr.current=null; },4000);
+    return()=>{ clearTimeout(t); try{ if(searchMkr.current) searchMkr.current.map=null; }catch(e){} };
+  },[searchHL]);
 
   return <div id="map-root" suppressHydrationWarning><div ref={divRef} style={{width:'100%',height:'100%'}} suppressHydrationWarning/></div>;
 }
@@ -1272,6 +1368,179 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
   return <div className="side-panel si" style={{display:'flex',flexDirection:'column'}}>{inner}</div>;
 }
 
+// ─── Location Search ──────────────────────────────────────────────────────────
+// Uses Google Places AutocompleteService (same key already loaded for the map).
+// Falls back to local SEARCH_LOCS dataset if Places isn't ready or query fails.
+function LocationSearch({ onSelect }) {
+  const [q,setQ]           = useState('');
+  const [results,setRes]   = useState([]);
+  const [open,setOpen]     = useState(false);
+  const [active,setActive] = useState(-1);
+  const [loading,setLoad]  = useState(false);
+  const inputRef  = useRef(null);
+  const wrapRef   = useRef(null);
+  const dummyRef  = useRef(null); // PlacesService needs a DOM node or Map instance
+  const autoSvc   = useRef(null); // AutocompleteService singleton
+  const detailSvc = useRef(null); // PlacesService singleton
+  const debounce  = useRef(null);
+
+  // Delhi NCR bounding box — biases autocomplete toward NCR without hard-blocking
+  const NCR_BOUNDS = ()=>new window.google.maps.LatLngBounds(
+    {lat:27.85, lng:76.80},  // SW: south of Faridabad / west of Gurgaon
+    {lat:28.95, lng:77.80}   // NE: north of Rohini / east of Ghaziabad
+  );
+
+  const getAutoSvc=()=>{
+    if(autoSvc.current) return autoSvc.current;
+    if(window.google?.maps?.places){
+      autoSvc.current=new window.google.maps.places.AutocompleteService();
+    }
+    return autoSvc.current;
+  };
+
+  const getDetailSvc=()=>{
+    if(detailSvc.current) return detailSvc.current;
+    if(window.google?.maps?.places && dummyRef.current){
+      detailSvc.current=new window.google.maps.places.PlacesService(dummyRef.current);
+    }
+    return detailSvc.current;
+  };
+
+  // Local fallback — instant, no API call
+  const localFallback=lq=>{
+    const hits=SEARCH_LOCS.filter(l=>
+      l.name.toLowerCase().includes(lq)||l.sub.toLowerCase().includes(lq)
+    ).sort((a,b)=>{
+      const as=a.name.toLowerCase().startsWith(lq), bs=b.name.toLowerCase().startsWith(lq);
+      if(as&&!bs) return -1; if(bs&&!as) return 1;
+      return a.name.localeCompare(b.name);
+    }).slice(0,7);
+    setRes(hits.map(h=>({...h,_local:true})));
+    setOpen(hits.length>0);
+    setActive(-1);
+  };
+
+  useEffect(()=>{
+    const lq=q.trim().toLowerCase();
+    if(!lq){ setRes([]); setOpen(false); setLoad(false); return; }
+
+    clearTimeout(debounce.current);
+    debounce.current=setTimeout(()=>{
+      const svc=getAutoSvc();
+      if(!svc){ localFallback(lq); return; }
+
+      setLoad(true);
+      svc.getPlacePredictions({
+        input: q,
+        bounds: NCR_BOUNDS(),
+        componentRestrictions: { country:'in' },
+      },(preds,status)=>{
+        setLoad(false);
+        const OK=window.google.maps.places.PlacesServiceStatus.OK;
+        if(status===OK && preds?.length){
+          setRes(preds.slice(0,7).map(p=>({
+            place_id: p.place_id,
+            name: p.structured_formatting?.main_text || p.description,
+            sub:  p.structured_formatting?.secondary_text || '',
+            type: 'place',
+            _local: false,
+          })));
+          setOpen(true);
+          setActive(-1);
+        } else {
+          // API returned nothing useful — fall back to local
+          localFallback(lq);
+        }
+      });
+    }, 220);
+    return()=>clearTimeout(debounce.current);
+  },[q]);
+
+  // Close on outside click / tap
+  useEffect(()=>{
+    const fn=e=>{ if(wrapRef.current&&!wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown',fn);
+    document.addEventListener('touchstart',fn);
+    return()=>{ document.removeEventListener('mousedown',fn); document.removeEventListener('touchstart',fn); };
+  },[]);
+
+  // Pick a local result (lat/lng already known)
+  const pickLocal=r=>{
+    onSelect({lat:r.lat, lng:r.lng, name:r.name, zoom:r.zoom||14});
+    setQ(r.name); setOpen(false); setActive(-1); inputRef.current?.blur();
+  };
+
+  // Pick a Places result — need to fetch geometry via getDetails
+  const pickPlace=r=>{
+    const svc=getDetailSvc();
+    if(!svc){ setQ(r.name); setOpen(false); return; }
+    svc.getDetails({placeId:r.place_id, fields:['geometry','name']},(place,st)=>{
+      const OK=window.google.maps.places.PlacesServiceStatus.OK;
+      if(st===OK && place?.geometry?.location){
+        const lat=place.geometry.location.lat();
+        const lng=place.geometry.location.lng();
+        onSelect({lat, lng, name:r.name, zoom:15});
+      }
+      setQ(r.name); setOpen(false); setActive(-1); inputRef.current?.blur();
+    });
+  };
+
+  const pick=r=> r._local ? pickLocal(r) : pickPlace(r);
+
+  const onKey=e=>{
+    if(e.key==='ArrowDown'){ e.preventDefault(); setActive(a=>Math.min(a+1,results.length-1)); }
+    if(e.key==='ArrowUp')  { e.preventDefault(); setActive(a=>Math.max(a-1,0)); }
+    if(e.key==='Enter'&&active>=0){ e.preventDefault(); pick(results[active]); }
+    if(e.key==='Escape')  { setOpen(false); inputRef.current?.blur(); }
+  };
+
+  const icon=t=>t==='metro'?'🚇':t==='airport'?'✈️':t==='landmark'?'🏛':'📍';
+
+  return (
+    <div id="loc-search-wrap" ref={wrapRef}>
+      {/* Hidden div for PlacesService — never shown */}
+      <div ref={dummyRef} style={{display:'none'}}/>
+      <div style={{position:'relative'}}>
+        <span className="loc-icon">🔍</span>
+        <input id="loc-search-input" ref={inputRef}
+          value={q}
+          onChange={e=>{ setQ(e.target.value); setOpen(true); }}
+          onKeyDown={onKey}
+          onFocus={()=>{ if(results.length>0) setOpen(true); }}
+          placeholder="Search area, society, landmark…"
+          autoComplete="off"
+        />
+        {loading&&!q&&null}
+        {loading&&<span style={{position:'absolute',right:q?28:10,top:'50%',transform:'translateY(-50%)',fontSize:12,color:'#9ca3af',pointerEvents:'none'}}>…</span>}
+        {q&&<button className="loc-clear" onMouseDown={e=>{e.preventDefault();setQ('');setRes([]);setOpen(false);}}>×</button>}
+      </div>
+      {open&&(
+        <div className="loc-drop">
+          {results.length===0
+            ? <div className="loc-empty">No results for "{q}"</div>
+            : results.map((r,i)=>(
+                <button key={r.place_id||i} className={'loc-item'+(i===active?' hi':'')}
+                  onMouseDown={e=>{e.preventDefault();pick(r);}}
+                  onMouseEnter={()=>setActive(i)}>
+                  <span style={{fontSize:15,flexShrink:0}}>{icon(r.type)}</span>
+                  <div style={{minWidth:0}}>
+                    <div className="loc-item-name">{r.name}</div>
+                    {r.sub&&<div className="loc-item-sub">{r.sub}</div>}
+                  </div>
+                </button>
+              ))
+          }
+          {results.some(r=>!r._local)&&(
+            <div style={{padding:'4px 10px 5px',fontSize:10,color:'#d1d5db',textAlign:'right',borderTop:'1px solid #f3f4f6'}}>
+              Powered by Google
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Onboarding Modal (first visit only) ─────────────────────────────────────
 function OnboardingModal({ onClose, onContribute }) {
   return (
@@ -1506,6 +1775,7 @@ export default function NCRRealty({ initialPins=[] }) {
   const [dropLng,setDLng]      = useState(null);
   const [selPin,setSelPin]     = useState(null);
   const [flyTo,setFlyTo]       = useState(null);
+  const [searchHL,setSearchHL] = useState(null); // pulse marker from location search
   const [showMetro,setMetro]   = useState(false);
   const [toast,setToast]       = useState(null);
   const [isMobile,setMob]      = useState(false);
@@ -1595,9 +1865,18 @@ export default function NCRRealty({ initialPins=[] }) {
       {/* ── Map (always behind everything) ── */}
       <NCRMap pins={pins} filters={filters} showMetro={showMetro} fhDropMode={fhDropMode}
         onPinClick={p=>{setSelPin(p);const _c=pinCoords(p);if(_c)setFlyTo({lat:_c.lat,lng:_c.lng,zoom:_c.exact?17:14,ts:Date.now()});}}
-        onMapClick={handleMapClick} flyTo={flyTo}/>
+        onMapClick={handleMapClick} flyTo={flyTo} searchHL={searchHL}/>
 
-      {/* ── Desktop explore panel (slides in from left) ── */}
+      {/* ── Location search bar (floating below topbar) ── */}
+      <LocationSearch onSelect={loc=>{
+        // Always fly to the location
+        setFlyTo({lat:loc.lat, lng:loc.lng, zoom:loc.zoom||14, ts:Date.now()});
+        setSearchHL({lat:loc.lat, lng:loc.lng, ts:Date.now()});
+        // In contribute mode: pre-fill drop coordinates so user can open form right there
+        if(tab==='contribute'){
+          setDLat(loc.lat); setDLng(loc.lng);
+        }
+      }}/>
       {!isMobile&&showExplore&&(
         <ExplorePanel pins={pins} loading={loading} filters={filters}
           onPinClick={p=>{setSelPin(p);const _c=pinCoords(p);if(_c)setFlyTo({lat:_c.lat,lng:_c.lng,zoom:_c.exact?17:14,ts:Date.now()});}}
