@@ -331,11 +331,10 @@ export default async function AreaPage({ params }) {
 
         {/* Nearby areas */}
         <Section title={`Other Areas in ${city.label}`}>
+          <style>{`.nearby-link{background:#fff;border-radius:10px;padding:12px 14px;border:1px solid #e8e8e0;text-decoration:none;color:#1a1a1a;display:block;transition:border-color .15s}.nearby-link:hover{border-color:${col}}`}</style>
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:10}}>
             {nearby.map(a => (
-              <Link key={a.id} href={`/area/${a.id}`} style={{background:'#fff',borderRadius:10,padding:'12px 14px',border:'1px solid #e8e8e0',textDecoration:'none',color:'#1a1a1a',display:'block',transition:'border-color .15s'}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=col}
-                onMouseLeave={e=>e.currentTarget.style.borderColor='#e8e8e0'}>
+              <Link key={a.id} href={`/area/${a.id}`} className="nearby-link">
                 <div style={{fontWeight:600,fontSize:13,marginBottom:3}}>{a.name}</div>
                 <div style={{fontSize:11,color:'#999'}}>{city.label}</div>
               </Link>
