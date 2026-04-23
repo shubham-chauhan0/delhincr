@@ -359,12 +359,14 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
   const mapInst   = useRef(null);
   const markers   = useRef([]);
   const clusterer = useRef(null);
+  const areaBubs  = useRef([]);        // area summary bubbles (zoom 9-13)
   const metroLys  = useRef([]);
   const infoWin   = useRef(null);
   const initDone  = useRef(false);
   const cbRef     = useRef(onMapClick);
   const fhRef     = useRef(fhDropMode);
   const modeRef   = useRef('explore');
+  const bubbleFnRef = useRef(null);    // always-current ref to buildAreaBubbles
 
   useEffect(()=>{ cbRef.current = onMapClick; },[onMapClick]);
   useEffect(()=>{ fhRef.current = fhDropMode; },[fhDropMode]);
@@ -478,7 +480,104 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
     });
   },[showMetro]);
 
-  // Init Google Maps
+  // Build zoom-aware area summary bubbles
+  // Visible at zoom 9–13, only for areas that have pins after current filters
+  const buildAreaBubbles = useCallback(()=>{
+    const G = window.google?.maps;
+    if(!mapInst.current||!G) return;
+
+    // Clear previous bubbles
+    areaBubs.current.forEach(m=>{ try{ m.map=null; }catch(e){} });
+    areaBubs.current=[];
+
+    const zoom = mapInst.current.getZoom();
+    // Outside this range: individual pins / clusters handle the view
+    if(zoom<9||zoom>13) return;
+
+    // Apply same filter logic as buildMarkers so bubbles respect active filters
+    const show=pins.filter(p=>{
+      if(filters.mode!=='all'&&p.mode!==filters.mode) return false;
+      if(filters.bhk !=='all'&&p.bhk !==filters.bhk)  return false;
+      if(filters.city!=='all'&&p.city!==filters.city)  return false;
+      if(filters.avail&&!p.is_available)               return false;
+      if(filters.furnished==='furnished'  &&p.furnishing!=='Fully Furnished') return false;
+      if(filters.furnished==='unfurnished'&&p.furnishing!=='Unfurnished')     return false;
+      if(filters.minRent&&p.rent&&p.rent<+filters.minRent) return false;
+      if(filters.maxRent&&p.rent&&p.rent>+filters.maxRent) return false;
+      return true;
+    });
+
+    // Group by known area (skip custom pins)
+    const byArea={};
+    show.forEach(p=>{
+      if(!p.area_id||p.area_id==='custom') return;
+      (byArea[p.area_id]||(byArea[p.area_id]=[])).push(p);
+    });
+
+    AREAS.forEach(area=>{
+      const ap=byArea[area.id];
+      if(!ap||ap.length===0) return; // skip empty — the key improvement
+
+      const rents  = ap.filter(p=>p.mode==='rent'&&p.rent).map(p=>p.rent);
+      const prices = ap.filter(p=>p.mode==='buy' &&p.price).map(p=>p.price);
+      const avail  = ap.filter(p=>p.is_available).length;
+      const avgR   = rents.length  ? Math.round(rents.reduce((a,b)=>a+b,0)/rents.length)  : 0;
+      const avgP   = prices.length ? Math.round(prices.reduce((a,b)=>a+b,0)/prices.length): 0;
+      const count  = ap.length;
+      const col    = avgR ? rCol(avgR) : avgP ? pCol(avgP) : '#6b7280';
+
+      // Primary value label
+      const valStr = avgR ? (fmtR(avgR)+'/mo') : avgP ? fmtP(avgP) : '';
+
+      const el=document.createElement('div');
+      // Light-theme pill: white bg, colored border, subtle shadow
+      el.style.cssText=[
+        'background:#fff',
+        'border:1.5px solid '+col,
+        'border-radius:10px',
+        'padding:5px 9px',
+        'font-family:"DM Sans",sans-serif',
+        'box-shadow:0 2px 10px rgba(0,0,0,.13)',
+        'cursor:pointer',
+        'text-align:center',
+        'transition:box-shadow .12s,transform .12s',
+        'white-space:nowrap',
+        'user-select:none',
+      ].join(';');
+
+      el.innerHTML=
+        '<div style="font-size:10.5px;font-weight:700;color:#111;letter-spacing:-.1px;">'+area.name+'</div>'
+        +(valStr
+          ? '<div style="font-size:12px;font-weight:800;color:'+col+';font-family:\'DM Mono\',monospace;line-height:1.3;">'+valStr+'</div>'
+          : '')
+        +(avail>0
+          ? '<div style="font-size:9px;font-weight:700;color:#16a34a;background:#f0fdf4;border-radius:99px;padding:1px 5px;margin-top:2px;display:inline-block;">'+avail+' avail</div>'
+          : '<div style="font-size:9px;color:#9ca3af;margin-top:1px;">'+count+' pin'+(count>1?'s':'')+'</div>');
+
+      el.addEventListener('mouseenter',()=>{
+        el.style.boxShadow='0 4px 14px rgba(0,0,0,.2)';
+        el.style.transform='scale(1.05)';
+      });
+      el.addEventListener('mouseleave',()=>{
+        el.style.boxShadow='0 2px 10px rgba(0,0,0,.13)';
+        el.style.transform='scale(1)';
+      });
+      // Click → zoom into this area
+      el.addEventListener('click',e=>{
+        e.stopPropagation();
+        mapInst.current.panTo({lat:area.lat,lng:area.lng});
+        mapInst.current.setZoom(14);
+      });
+
+      const m=new G.marker.AdvancedMarkerElement({
+        position:{lat:area.lat,lng:area.lng},
+        content:el,
+        zIndex:300,
+        map:mapInst.current,
+      });
+      areaBubs.current.push(m);
+    });
+  },[pins,filters]);
   useEffect(()=>{
     if(initDone.current) return; initDone.current=true;
     const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -524,6 +623,11 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
         }
       });
 
+      // Zoom change → rebuild area bubbles (show/hide based on zoom level)
+      mapInst.current.addListener('zoom_changed', ()=>{
+        if(bubbleFnRef.current) bubbleFnRef.current();
+      });
+
       // Sync mode ref from body class
       const syncMode=()=>{ modeRef.current = document.body.classList.contains('contrib')?'contribute':'explore'; };
       const obs=new MutationObserver(syncMode);
@@ -541,10 +645,26 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
               const rents = ms.map(m=>m._pRent).filter(Boolean);
               const avlb  = ms.filter(m=>m._isAvail).length;
               const avgR  = rents.length ? Math.round(rents.reduce((a,b)=>a+b,0)/rents.length) : 0;
-              const col   = avgR ? rCol(avgR) : '#374151';
+              const col   = avgR ? rCol(avgR) : '#6b7280';
               const el = document.createElement('div');
-              el.style.cssText = 'background:rgba(26,26,26,0.92);color:#fff;border-radius:10px;padding:5px 11px;font-family:"DM Sans",sans-serif;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.15);text-align:center;cursor:pointer;line-height:1.5;';
-              el.innerHTML = count + ' flat' + (count>1?'s':'') + (avlb>0 ? '<br><span style="color:#4ade80;font-size:10px;">AVLB '+avlb+'</span>' : '');              return new window.google.maps.marker.AdvancedMarkerElement({position,content:el,zIndex:500});
+              // Light-theme cluster: white bg, colored border matching avg rent
+              el.style.cssText=[
+                'background:#fff',
+                'border:2px solid '+col,
+                'border-radius:12px',
+                'padding:5px 11px',
+                'font-family:"DM Sans",sans-serif',
+                'box-shadow:0 2px 10px rgba(0,0,0,.15)',
+                'text-align:center',
+                'cursor:pointer',
+                'line-height:1.4',
+                'min-width:52px',
+              ].join(';');
+              el.innerHTML=
+                (avgR ? '<div style="font-size:12px;font-weight:800;color:'+col+';font-family:\'DM Mono\',monospace;">'+fmtR(avgR)+'</div>' : '')
+                +'<div style="font-size:11px;font-weight:700;color:#374151;">'+count+' flat'+(count>1?'s':'')+'</div>'
+                +(avlb>0 ? '<div style="font-size:9.5px;font-weight:700;color:#16a34a;">'+avlb+' avail</div>' : '');
+              return new window.google.maps.marker.AdvancedMarkerElement({position,content:el,zIndex:500});
             }
           },
           algorithmOptions: { maxZoom: 15 },
@@ -565,6 +685,10 @@ function NCRMap({ pins, filters, showMetro, onPinClick, onMapClick, flyTo, fhDro
 
   useEffect(()=>{ if(mapInst.current&&window.google) buildMarkers(); },[buildMarkers]);
   useEffect(()=>{ if(mapInst.current&&window.google) buildMetro();   },[buildMetro]);
+
+  // Keep bubbleFnRef pointing at the latest buildAreaBubbles closure (pins/filters change)
+  useEffect(()=>{ bubbleFnRef.current = buildAreaBubbles; },[buildAreaBubbles]);
+  useEffect(()=>{ if(mapInst.current&&window.google) buildAreaBubbles(); },[buildAreaBubbles]);
 
   // Fly to
   useEffect(()=>{
