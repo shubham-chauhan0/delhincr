@@ -470,34 +470,45 @@ body.fh-drop #map-root,body.fh-drop #map-root *{cursor:crosshair!important;}
   z-index:650;
 }
 #loc-search-input{
-  width:100%;padding:8px 30px 8px 32px;
+  width:100%;padding:9px 30px 9px 32px;
   border:1.5px solid #e5e7eb;border-radius:10px;
-  font-size:13px;color:#111;background:rgba(255,255,255,.97);
+  /* 16px minimum — prevents iOS Safari auto-zoom on focus */
+  font-size:16px;color:#111;background:rgba(255,255,255,.97);
   outline:none;transition:border-color .15s,box-shadow .15s;
   box-shadow:0 2px 10px rgba(0,0,0,.1);
+  /* Prevent iOS double-tap zoom on input */
+  touch-action:manipulation;
+  /* Prevent bounce/overscroll on the input itself */
+  -webkit-overflow-scrolling:auto;
 }
 #loc-search-input:focus{border-color:#111;box-shadow:0 2px 14px rgba(0,0,0,.14);}
 #loc-search-input::placeholder{color:#9ca3af;}
 .loc-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none;color:#9ca3af;}
-.loc-clear{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:15px;color:#9ca3af;padding:2px 3px;line-height:1;border-radius:4px;}
+.loc-clear{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;color:#9ca3af;padding:4px 5px;line-height:1;border-radius:4px;touch-action:manipulation;}
 .loc-clear:hover{color:#374151;}
 .loc-drop{
   position:absolute;top:calc(100% + 4px);left:0;right:0;
   background:#fff;border-radius:12px;border:1.5px solid #e5e7eb;
   box-shadow:0 8px 28px rgba(0,0,0,.16);
-  overflow:hidden;max-height:312px;overflow-y:auto;
+  /* max-height with internal scroll — contains iOS bounce inside dropdown */
+  max-height:min(312px,50dvh);overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
   z-index:651;
 }
 .loc-item{
-  width:100%;padding:9px 12px;border:none;background:transparent;
+  width:100%;padding:12px 12px;border:none;background:transparent;
   cursor:pointer;text-align:left;display:flex;align-items:center;gap:9px;
-  border-bottom:1px solid #f3f4f6;transition:background .08s;
+  border-bottom:1px solid #f3f4f6;
+  /* Larger tap target + prevent double-tap zoom */
+  touch-action:manipulation;
+  min-height:48px;
 }
 .loc-item:last-child{border-bottom:none;}
-.loc-item:hover,.loc-item.hi{background:#f3f4f6;}
-.loc-item-name{font-size:13px;font-weight:600;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.loc-item-sub{font-size:11px;color:#6b7280;margin-top:1px;}
-.loc-empty{padding:14px 12px;text-align:center;font-size:13px;color:#9ca3af;}
+.loc-item:hover,.loc-item.hi,.loc-item:active{background:#f3f4f6;}
+.loc-item-name{font-size:14px;font-weight:600;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.loc-item-sub{font-size:12px;color:#6b7280;margin-top:2px;}
+.loc-empty{padding:16px 12px;text-align:center;font-size:14px;color:#9ca3af;}
 
 @keyframes srchPulse{
   0%  {transform:translate(-50%,-50%) scale(1);   opacity:.9;}
@@ -1499,17 +1510,19 @@ function LocationSearch({ onSelect }) {
   const [open,setOpen]     = useState(false);
   const [active,setActive] = useState(-1);
   const [loading,setLoad]  = useState(false);
-  const inputRef  = useRef(null);
-  const wrapRef   = useRef(null);
-  const dummyRef  = useRef(null); // PlacesService needs a DOM node or Map instance
-  const autoSvc   = useRef(null); // AutocompleteService singleton
-  const detailSvc = useRef(null); // PlacesService singleton
-  const debounce  = useRef(null);
+  const inputRef     = useRef(null);
+  const wrapRef      = useRef(null);
+  const dummyRef     = useRef(null);
+  const autoSvc      = useRef(null);
+  const detailSvc    = useRef(null);
+  const debounce     = useRef(null);
+  // Prevents onBlur from closing dropdown before a touch-tap on an item fires
+  const pickingRef   = useRef(false);
+  const blurTimer    = useRef(null);
 
-  // Delhi NCR bounding box — biases autocomplete toward NCR without hard-blocking
   const NCR_BOUNDS = ()=>new window.google.maps.LatLngBounds(
-    {lat:27.85, lng:76.80},  // SW: south of Faridabad / west of Gurgaon
-    {lat:28.95, lng:77.80}   // NE: north of Rohini / east of Ghaziabad
+    {lat:27.85, lng:76.80},
+    {lat:28.95, lng:77.80}
   );
 
   const getAutoSvc=()=>{
@@ -1528,7 +1541,6 @@ function LocationSearch({ onSelect }) {
     return detailSvc.current;
   };
 
-  // Local fallback — instant, no API call
   const localFallback=lq=>{
     const hits=SEARCH_LOCS.filter(l=>
       l.name.toLowerCase().includes(lq)||l.sub.toLowerCase().includes(lq)
@@ -1545,12 +1557,10 @@ function LocationSearch({ onSelect }) {
   useEffect(()=>{
     const lq=q.trim().toLowerCase();
     if(!lq){ setRes([]); setOpen(false); setLoad(false); return; }
-
     clearTimeout(debounce.current);
     debounce.current=setTimeout(()=>{
       const svc=getAutoSvc();
       if(!svc){ localFallback(lq); return; }
-
       setLoad(true);
       svc.getPlacePredictions({
         input: q,
@@ -1570,7 +1580,6 @@ function LocationSearch({ onSelect }) {
           setOpen(true);
           setActive(-1);
         } else {
-          // API returned nothing useful — fall back to local
           localFallback(lq);
         }
       });
@@ -1578,49 +1587,67 @@ function LocationSearch({ onSelect }) {
     return()=>clearTimeout(debounce.current);
   },[q]);
 
-  // Close on outside click / tap
-  useEffect(()=>{
-    const fn=e=>{ if(wrapRef.current&&!wrapRef.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown',fn);
-    document.addEventListener('touchstart',fn);
-    return()=>{ document.removeEventListener('mousedown',fn); document.removeEventListener('touchstart',fn); };
-  },[]);
+  // Cleanup timers on unmount
+  useEffect(()=>()=>{ clearTimeout(debounce.current); clearTimeout(blurTimer.current); },[]);
 
-  // Pick a local result (lat/lng already known)
-  const pickLocal=r=>{
-    onSelect({lat:r.lat, lng:r.lng, name:r.name, zoom:r.zoom||14});
-    setQ(r.name); setOpen(false); setActive(-1); inputRef.current?.blur();
+  const closeAll=()=>{ setOpen(false); setActive(-1); pickingRef.current=false; };
+
+  // onBlur — deferred so a touch-tap on a dropdown item can fire pick() first
+  const handleBlur=()=>{
+    blurTimer.current=setTimeout(()=>{
+      if(!pickingRef.current) closeAll();
+    }, 180);
   };
 
-  // Pick a Places result — need to fetch geometry via getDetails
+  const handleFocus=()=>{
+    clearTimeout(blurTimer.current);
+    if(results.length>0) setOpen(true);
+  };
+
+  // Called on pointerdown on any dropdown item — sets flag BEFORE blur fires
+  const handleItemPointerDown=()=>{
+    pickingRef.current=true;
+    clearTimeout(blurTimer.current);
+  };
+
+  const pickLocal=r=>{
+    onSelect({lat:r.lat, lng:r.lng, name:r.name, zoom:r.zoom||14});
+    setQ(r.name);
+    closeAll();
+    // Blur after state updates so iOS keyboard dismisses
+    setTimeout(()=>inputRef.current?.blur(), 10);
+  };
+
   const pickPlace=r=>{
     const svc=getDetailSvc();
-    if(!svc){ setQ(r.name); setOpen(false); return; }
+    if(!svc){ setQ(r.name); closeAll(); setTimeout(()=>inputRef.current?.blur(),10); return; }
     svc.getDetails({placeId:r.place_id, fields:['geometry','name']},(place,st)=>{
       const OK=window.google.maps.places.PlacesServiceStatus.OK;
       if(st===OK && place?.geometry?.location){
-        const lat=place.geometry.location.lat();
-        const lng=place.geometry.location.lng();
-        onSelect({lat, lng, name:r.name, zoom:15});
+        onSelect({lat:place.geometry.location.lat(), lng:place.geometry.location.lng(), name:r.name, zoom:15});
       }
-      setQ(r.name); setOpen(false); setActive(-1); inputRef.current?.blur();
+      setQ(r.name);
+      closeAll();
+      setTimeout(()=>inputRef.current?.blur(), 10);
     });
   };
 
-  const pick=r=> r._local ? pickLocal(r) : pickPlace(r);
+  const pick=r=>{
+    if(r._local) pickLocal(r); else pickPlace(r);
+  };
 
   const onKey=e=>{
     if(e.key==='ArrowDown'){ e.preventDefault(); setActive(a=>Math.min(a+1,results.length-1)); }
     if(e.key==='ArrowUp')  { e.preventDefault(); setActive(a=>Math.max(a-1,0)); }
     if(e.key==='Enter'&&active>=0){ e.preventDefault(); pick(results[active]); }
-    if(e.key==='Escape')  { setOpen(false); inputRef.current?.blur(); }
+    if(e.key==='Escape')   { closeAll(); inputRef.current?.blur(); }
   };
 
   const icon=t=>t==='metro'?'🚇':t==='airport'?'✈️':t==='landmark'?'🏛':'📍';
 
   return (
     <div id="loc-search-wrap" ref={wrapRef}>
-      {/* Hidden div for PlacesService — never shown */}
+      {/* Hidden div required by PlacesService */}
       <div ref={dummyRef} style={{display:'none'}}/>
       <div style={{position:'relative'}}>
         <span className="loc-icon">🔍</span>
@@ -1628,23 +1655,39 @@ function LocationSearch({ onSelect }) {
           value={q}
           onChange={e=>{ setQ(e.target.value); setOpen(true); }}
           onKeyDown={onKey}
-          onFocus={()=>{ if(results.length>0) setOpen(true); }}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
           placeholder="Search area, society, landmark…"
           autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck="false"
+          enterKeyHint="search"
+          inputMode="search"
         />
-        {loading&&!q&&null}
-        {loading&&<span style={{position:'absolute',right:q?28:10,top:'50%',transform:'translateY(-50%)',fontSize:12,color:'#9ca3af',pointerEvents:'none'}}>…</span>}
-        {q&&<button className="loc-clear" onMouseDown={e=>{e.preventDefault();setQ('');setRes([]);setOpen(false);}}>×</button>}
+        {loading&&<span style={{position:'absolute',right:q?30:10,top:'50%',transform:'translateY(-50%)',fontSize:12,color:'#9ca3af',pointerEvents:'none'}}>…</span>}
+        {q&&(
+          <button className="loc-clear"
+            onPointerDown={e=>{
+              // preventDefault stops blur firing before we clear — works on iOS + Android
+              e.preventDefault();
+              setQ(''); setRes([]); closeAll();
+            }}>
+            ×
+          </button>
+        )}
       </div>
       {open&&(
         <div className="loc-drop">
           {results.length===0
             ? <div className="loc-empty">No results for "{q}"</div>
             : results.map((r,i)=>(
-                <button key={r.place_id||i} className={'loc-item'+(i===active?' hi':'')}
-                  onMouseDown={e=>{e.preventDefault();pick(r);}}
+                <button key={r.place_id||i}
+                  className={'loc-item'+(i===active?' hi':'')}
+                  onPointerDown={handleItemPointerDown}
+                  onClick={()=>pick(r)}
                   onMouseEnter={()=>setActive(i)}>
-                  <span style={{fontSize:15,flexShrink:0}}>{icon(r.type)}</span>
+                  <span style={{fontSize:16,flexShrink:0}}>{icon(r.type)}</span>
                   <div style={{minWidth:0}}>
                     <div className="loc-item-name">{r.name}</div>
                     {r.sub&&<div className="loc-item-sub">{r.sub}</div>}
@@ -1653,7 +1696,7 @@ function LocationSearch({ onSelect }) {
               ))
           }
           {results.some(r=>!r._local)&&(
-            <div style={{padding:'4px 10px 5px',fontSize:10,color:'#d1d5db',textAlign:'right',borderTop:'1px solid #f3f4f6'}}>
+            <div style={{padding:'5px 10px 6px',fontSize:10,color:'#d1d5db',textAlign:'right',borderTop:'1px solid #f3f4f6'}}>
               Powered by Google
             </div>
           )}
