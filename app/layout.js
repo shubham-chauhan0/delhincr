@@ -30,9 +30,11 @@ export const metadata = {
   ],
   authors: [{ name: 'NCR Realty Community' }],
   creator: 'NCR Realty',
-  alternates: {
-    canonical: BASE,
-  },
+  alternates: { canonical: BASE },
+  // Correct viewport — prevents iOS Safari from zooming on input focus
+  // user-scalable=no keeps the map feel native; interactive-widget shrinks
+  // the viewport to the visible area so the keyboard doesn't push content
+  viewport: 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-visual',
   openGraph: {
     type: 'website',
     locale: 'en_IN',
