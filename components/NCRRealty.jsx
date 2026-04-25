@@ -192,7 +192,86 @@ function nearestMetroKm(lat,lng){
 //   metro_prox   0-20  — proximity to nearest metro line point
 //   availability 0-10  — available flats right now
 //   bhk_match    0-10  — area has pins for preferred BHK
-// ─── Hidden Cost Calculator — pure functions ──────────────────────────────────
+// ─── Area Locality Intelligence Score ────────────────────────────────────────
+// Pure function — no side effects, no API calls.
+// Returns null if an area has fewer than MIN_PINS data points (low confidence).
+// Score: 0–100, built from 5 explainable pillars:
+//
+//  Pillar         Max   What it measures
+//  ─────────────────────────────────────────────────────────────
+//  affordability   30   Rent level vs NCR median (relative value)
+//  activity        25   Data density — more pins = more trustworthy
+//  availability    20   Live "available" flats right now
+//  connectivity    15   Distance to nearest metro line point
+//  demand          10   Seeker interest (flat-hunt pins in area)
+//
+// TODO: add commute_score once commute API is integrated
+// TODO: add demand pillar once flat_hunt_pins are passed in here
+const AREA_SCORE_MIN_PINS = 2; // below this, score is suppressed — not enough data
+
+function computeAreaScore(area, allPins) {
+  const rentPins  = allPins.filter(p=>p.area_id===area.id && p.mode==='rent' && p.rent);
+  const buyPins   = allPins.filter(p=>p.area_id===area.id && p.mode==='buy');
+  const totalPins = rentPins.length + buyPins.length;
+  if(totalPins < AREA_SCORE_MIN_PINS) return null;
+
+  const rents   = rentPins.map(p=>p.rent);
+  const avgR    = avg(rents);
+  const availN  = rentPins.filter(p=>p.is_available).length;
+  const metroKm = nearestMetroKm(area.lat, area.lng);
+
+  // ── 1. Affordability (0–30) ───────────────────────────────────────────────
+  // Reference: Delhi NCR median ~₹25K/mo. Lower rent = better affordability score.
+  // Scale: <15K→30, 15-25K→25, 25-40K→18, 40-65K→10, >65K→4
+  // Graceful skip: if no rent data, use 12 (neutral mid-point)
+  let affordability = 12;
+  if(avgR>0){
+    if(avgR<15000)      affordability=30;
+    else if(avgR<25000) affordability=25;
+    else if(avgR<40000) affordability=18;
+    else if(avgR<65000) affordability=10;
+    else                affordability=4;
+  }
+
+  // ── 2. Activity / Data density (0–25) ────────────────────────────────────
+  // Each pin = +3pts, capped at 25. More pins = higher community trust.
+  const activity = Math.min(totalPins * 3, 25);
+
+  // ── 3. Availability (0–20) ───────────────────────────────────────────────
+  // Live "available" flats are a strong signal of market activity.
+  // 1 avail→8, 2→14, 3+→20
+  const availability = availN===0 ? 0 : availN===1 ? 8 : availN===2 ? 14 : 20;
+
+  // ── 4. Connectivity / Metro proximity (0–15) ─────────────────────────────
+  // <0.8km→15, <1.5km→12, <2.5km→9, <4km→5, ≥4km→1
+  let connectivity;
+  if(metroKm<0.8)      connectivity=15;
+  else if(metroKm<1.5) connectivity=12;
+  else if(metroKm<2.5) connectivity=9;
+  else if(metroKm<4)   connectivity=5;
+  else                 connectivity=1;
+
+  // ── 5. Demand (0–10) — TODO once flat_hunt_pins passed in ────────────────
+  // Currently scaffolded at 0. Will be: seeker_pins_in_3km * 2, capped at 10.
+  const demand = 0; // TODO: pass fhPins to this function and compute from seekers
+
+  const total = Math.min(100, affordability + activity + availability + connectivity + demand);
+
+  // Grade label: purely derived from total, not hardcoded per area
+  let grade, gradeColor;
+  if(total>=75)      { grade='Excellent';  gradeColor='#16a34a'; }
+  else if(total>=58) { grade='Good';       gradeColor='#2563eb'; }
+  else if(total>=40) { grade='Fair';       gradeColor='#ca8a04'; }
+  else               { grade='Limited';   gradeColor='#9ca3af'; }
+
+  return {
+    total,
+    pillars: { affordability, activity, availability, connectivity, demand },
+    grade, gradeColor,
+    metroKm, avgRent:avgR, availCount:availN, pinCount:totalPins,
+  };
+}
+
 // All values in ₹. Returns NaN-safe results (missing inputs treated as 0).
 function calcRent({ rent=0, deposit=0, brokerage=0, maintenance=0, setup=0 }){
   const r=+rent||0, d=+deposit||0, b=+brokerage||0, m=+maintenance||0, s=+setup||0;
@@ -1256,6 +1335,90 @@ function FilterFloat({ filters, onChange, onClose, count }) {
   );
 }
 
+// ─── Area Score Badge ─────────────────────────────────────────────────────────
+// Compact inline badge for ExplorePanel rows.
+// Expanded tooltip on hover (desktop) for pillar breakdown.
+function AreaScoreBadge({ score, size='sm' }) {
+  const [tip, setTip] = useState(false);
+  if(!score) return null;
+
+  const { total, grade, gradeColor, pillars, metroKm, pinCount, availCount } = score;
+  const bg = gradeColor+'18';
+
+  // Bar width helper — scales 0-25 → 0-100% within its pillar max
+  const bar=(val,max)=>Math.round((val/max)*100)+'%';
+
+  const badge=(
+    <span
+      onMouseEnter={()=>setTip(true)}
+      onMouseLeave={()=>setTip(false)}
+      style={{
+        display:'inline-flex',alignItems:'center',gap:3,
+        padding: size==='sm'?'2px 7px':'3px 9px',
+        borderRadius:99,
+        background:bg,
+        border:`1px solid ${gradeColor}33`,
+        fontSize: size==='sm'?10:11,
+        fontWeight:700,
+        color:gradeColor,
+        cursor:'default',
+        flexShrink:0,
+        userSelect:'none',
+        position:'relative',
+      }}>
+      {total}<span style={{fontWeight:400,opacity:.7}}>/100</span>
+    </span>
+  );
+
+  if(!tip) return badge;
+
+  // Tooltip — appears on hover, absolute positioned above the badge
+  return (
+    <span style={{position:'relative',display:'inline-flex'}}>
+      {badge}
+      <span style={{
+        position:'absolute',bottom:'calc(100% + 6px)',right:0,
+        background:'#fff',border:'1.5px solid #e5e7eb',
+        borderRadius:12,padding:'12px 14px',
+        boxShadow:'0 6px 24px rgba(0,0,0,.15)',
+        zIndex:900,width:220,pointerEvents:'none',
+      }}>
+        <div style={{fontWeight:700,fontSize:13,color:'#111',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span>Locality Score</span>
+          <span style={{color:gradeColor}}>{total}/100 · {grade}</span>
+        </div>
+        {/* Pillar bars */}
+        {[
+          ['Affordability', pillars.affordability, 30, '#16a34a'],
+          ['Activity',      pillars.activity,       25, '#2563eb'],
+          ['Availability',  pillars.availability,   20, '#7c3aed'],
+          ['Connectivity',  pillars.connectivity,   15, '#0891b2'],
+        ].map(([name,val,max,c])=>(
+          <div key={name} style={{marginBottom:7}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:10.5,fontWeight:600,color:'#6b7280',marginBottom:2}}>
+              <span>{name}</span>
+              <span style={{color:c,fontWeight:700}}>{val}/{max}</span>
+            </div>
+            <div style={{height:4,background:'#f0f0f0',borderRadius:99,overflow:'hidden'}}>
+              <div style={{height:'100%',width:bar(val,max),background:c,borderRadius:99}}/>
+            </div>
+          </div>
+        ))}
+        {pillars.demand===0&&(
+          <div style={{fontSize:10,color:'#d1d5db',marginTop:6,fontStyle:'italic'}}>Demand pillar: coming soon</div>
+        )}
+        <div style={{marginTop:8,paddingTop:7,borderTop:'1px solid #f3f4f6',fontSize:10,color:'#9ca3af',lineHeight:1.6}}>
+          Based on {pinCount} community pins · {metroKm<1?'<1':metroKm}km to metro
+          {availCount>0?` · ${availCount} avail now`:''}
+        </div>
+        <div style={{marginTop:5,fontSize:9.5,color:'#c4c4c4',lineHeight:1.5}}>
+          Score reflects community data density, pricing, flat availability, and metro access.
+        </div>
+      </span>
+    </span>
+  );
+}
+
 // ─── ExplorePanel ─────────────────────────────────────────────────────────────
 function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, isMobile }) {
   const [srch,setSrch] = useState('');
@@ -1289,10 +1452,12 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
   const areaRows = AREAS
     .filter(a=>(filters.city==='all'||a.city===filters.city)&&(!srch||a.name.toLowerCase().includes(srch.toLowerCase())))
     .map(a=>({...a,rp:fP.filter(p=>p.area_id===a.id&&p.mode==='rent'),bp:fP.filter(p=>p.area_id===a.id&&p.mode==='buy')}))
+    .map(a=>({...a, _score: computeAreaScore(a, fP) }))
     .sort((a,b)=>{
       if(sort==='pins')    return (b.rp.length+b.bp.length)-(a.rp.length+a.bp.length);
       if(sort==='rent_lo') return avg(a.rp.map(p=>p.rent))-avg(b.rp.map(p=>p.rent));
       if(sort==='rent_hi') return avg(b.rp.map(p=>p.rent))-avg(a.rp.map(p=>p.rent));
+      if(sort==='score')   return (b._score?.total||0)-(a._score?.total||0);
       return avg(b.bp.map(p=>p.price_per_sqft||0))-avg(a.bp.map(p=>p.price_per_sqft||0));
     });
 
@@ -1318,7 +1483,7 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
         <div style={{display:'flex',gap:6,marginBottom:10,alignItems:'center'}}>
           <span style={{fontSize:11,fontWeight:600,color:sc,textTransform:'uppercase',letterSpacing:'.04em',flexShrink:0}}>Sort</span>
           <div style={{display:'flex',gap:4,flex:1,flexWrap:'wrap'}}>
-            {[['pins','Active'],['rent_lo','Rent ↑'],['rent_hi','Rent ↓'],['psft','₹/sqft']].map(([v,l])=>(
+            {[['pins','Active'],['score','Score ★'],['rent_lo','Rent ↑'],['rent_hi','Rent ↓'],['psft','₹/sqft']].map(([v,l])=>(
               <button key={v} onClick={()=>setSort(v)} style={{padding:'4px 10px',borderRadius:99,fontSize:11,fontWeight:600,cursor:'pointer',border:`1px solid ${sort===v?'#e85d26':'transparent'}`,background:sort===v?'#e85d2614':'transparent',color:sort===v?'#e85d26':sc,whiteSpace:'nowrap'}}>{l}</button>
             ))}
           </div>
@@ -1364,7 +1529,10 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
                         <span style={{fontWeight:total===0?400:600,fontSize:14,color:tc}}>{area.name}</span>
                         {avail>0&&<span style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#dcfce7',padding:'2px 6px',borderRadius:99,border:'1px solid #86efac'}}>{avail} avail</span>}
                       </div>
-                      <span style={{fontSize:11,color:sc,background:bd,padding:'2px 7px',borderRadius:99}}>{CITIES[area.city]?.label}</span>
+                      <div style={{display:'flex',alignItems:'center',gap:5}}>
+                        {area._score&&<AreaScoreBadge score={area._score} size="sm"/>}
+                        <span style={{fontSize:11,color:sc,background:bd,padding:'2px 7px',borderRadius:99}}>{CITIES[area.city]?.label}</span>
+                      </div>
                     </div>
                     {total>0&&<>
                       <div style={{height:3,background:'#f0f0f0',borderRadius:99,margin:'6px 0 5px',overflow:'hidden'}}>
@@ -2120,6 +2288,8 @@ function BudgetWizard({ pins, onClose, onFlyTo, onApplyFilters }) {
                 const cityLabel = CITIES[r.area.city]?.label||r.area.city;
                 const isRent = intent==='rent';
                 const valColor = isRent?rCol(r.avgVal):pCol(r.avgVal);
+                // Compute locality intelligence score for wizard results too
+                const areaScore = computeAreaScore(r.area, pins);
                 return (
                   <div key={r.area.id} style={{
                     background:'#fff', border:'1.5px solid #e5e7eb', borderRadius:14,
@@ -2129,10 +2299,11 @@ function BudgetWizard({ pins, onClose, onFlyTo, onApplyFilters }) {
                     {/* Header row */}
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:2}}>
+                        <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:2,flexWrap:'wrap'}}>
                           <span style={{fontWeight:800,fontSize:15,color:'#111'}}>{r.area.name}</span>
                           <span style={{fontSize:10,color:'#9ca3af',background:'#f3f4f6',padding:'1px 6px',borderRadius:99,flexShrink:0}}>{cityLabel}</span>
                           {i===0&&<span style={{fontSize:10,fontWeight:700,color:'#166534',background:'#dcfce7',padding:'1px 7px',borderRadius:99,flexShrink:0}}>Top pick</span>}
+                          {areaScore&&<AreaScoreBadge score={areaScore} size="sm"/>}
                         </div>
                         {/* Why recommended */}
                         <div style={{fontSize:11.5,color:'#6b7280',lineHeight:1.5}}>{r.reasons.slice(0,2).join(' · ')}</div>
