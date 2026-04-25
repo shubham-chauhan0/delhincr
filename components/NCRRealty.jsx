@@ -193,7 +193,18 @@ function nearestMetroKm(lat,lng){
 //   availability 0-10  — available flats right now
 //   bhk_match    0-10  — area has pins for preferred BHK
 // ─── Area Locality Intelligence Score ────────────────────────────────────────
-// Pure function — no side effects, no API calls.
+// Pure helpers — can be reused anywhere in the app
+
+// Confidence label based on pin count — explainable, not gamed
+// Returns { level, label, color, sub } or null if 0 pins
+function areaConfidence(pinCount) {
+  if(!pinCount || pinCount===0) return null;
+  if(pinCount>=10) return { level:'high',   label:'High confidence',  color:'#16a34a', sub:`${pinCount} community pins` };
+  if(pinCount>=5)  return { level:'medium', label:'Decent data',      color:'#2563eb', sub:`${pinCount} community pins` };
+  if(pinCount>=2)  return { level:'low',    label:'Early data',       color:'#ca8a04', sub:`${pinCount} pins — more needed` };
+  return            { level:'sparse', label:'1 pin only',       color:'#9ca3af', sub:'Limited data — add yours' };
+}
+
 // Returns null if an area has fewer than MIN_PINS data points (low confidence).
 // Score: 0–100, built from 5 explainable pillars:
 //
@@ -1183,7 +1194,7 @@ function PinForm({ onSubmit, onClose, defaultMode='rent', prefLat, prefLng }) {
 }
 
 // ─── PinDetail ────────────────────────────────────────────────────────────────
-function PinDetail({ pin, onClose, onUpvote, onFlyTo, onCalc }) {
+function PinDetail({ pin, onClose, onUpvote, onFlyTo, onCalc, onQuickEcho, allPins }) {
   const [tab,setTab]         = useState('info');
   const [comments,setComs]   = useState([]);
   const [cBody,setCBody]     = useState('');
@@ -1235,6 +1246,13 @@ function PinDetail({ pin, onClose, onUpvote, onFlyTo, onCalc }) {
                 {pin.is_available&&<span style={{background:'#dcfce7',color:'#166534',border:'1px solid #86efac',padding:'2px 8px',borderRadius:99,fontSize:11,fontWeight:700}}>✅ AVAILABLE</span>}
                 <span style={{background:'#f1f5f9',color:'#475569',border:'1px solid #cbd5e1',padding:'2px 8px',borderRadius:99,fontSize:11}}>{area?.name||pin.area_name}</span>
                 <span style={{background:'#f1f5f9',color:'#475569',border:'1px solid #cbd5e1',padding:'2px 8px',borderRadius:99,fontSize:11}}>{tAgo(pin.created_at)}</span>
+                {/* Area confidence */}
+                {(()=>{
+                  const cnt=(allPins||[]).filter(p=>p.area_id===pin.area_id).length;
+                  const cf=areaConfidence(cnt);
+                  if(!cf) return null;
+                  return <span title={cf.sub} style={{background:cf.color+'12',color:cf.color,border:`1px solid ${cf.color}33`,padding:'2px 8px',borderRadius:99,fontSize:11,fontWeight:600}}>● {cf.label}</span>;
+                })()}
               </div>
             </div>
             <button onClick={onClose} style={{width:28,height:28,borderRadius:'50%',border:'1px solid #e0e0e0',background:'#fafafa',cursor:'pointer',fontSize:16,color:'#888',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:2}}>×</button>
@@ -1263,6 +1281,26 @@ function PinDetail({ pin, onClose, onUpvote, onFlyTo, onCalc }) {
               <button onClick={()=>onCalc(pin)} style={{width:'100%',padding:'9px',borderRadius:10,fontSize:12,fontWeight:700,cursor:'pointer',border:'1.5px solid #7c3aed',background:'#f5f3ff',color:'#7c3aed',marginBottom:12}}>
                 💰 Calculate true cost
               </button>
+            )}
+            {/* "I paid similar / lower / higher" — quick echo contributions */}
+            {onQuickEcho&&isR&&pin.rent>0&&(
+              <div style={{background:'#fafafa',border:'1px solid #e5e7eb',borderRadius:10,padding:'11px 12px',marginBottom:12}}>
+                <div style={{fontSize:11,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:7}}>Have similar info?</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6}}>
+                  <button onClick={()=>onQuickEcho(pin,'similar')} style={{padding:'8px',borderRadius:8,fontSize:11,fontWeight:700,cursor:'pointer',border:'1.5px solid #2563eb33',background:'#eff6ff',color:'#2563eb'}}>
+                    = Similar
+                  </button>
+                  <button onClick={()=>onQuickEcho(pin,'lower')} style={{padding:'8px',borderRadius:8,fontSize:11,fontWeight:700,cursor:'pointer',border:'1.5px solid #16a34a33',background:'#f0fdf4',color:'#16a34a'}}>
+                    ↓ Paid less
+                  </button>
+                  <button onClick={()=>onQuickEcho(pin,'higher')} style={{padding:'8px',borderRadius:8,fontSize:11,fontWeight:700,cursor:'pointer',border:'1.5px solid #ea580c33',background:'#fef3ee',color:'#ea580c'}}>
+                    ↑ Paid more
+                  </button>
+                </div>
+                <div style={{fontSize:10,color:'#9ca3af',marginTop:6,lineHeight:1.5}}>
+                  Adds an anonymous {pin.bhk} pin in {area?.name||pin.area_name} based on this one.
+                </div>
+              </div>
             )}
             {pin.is_available&&<div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:10,padding:'12px 13px',fontSize:13,color:'#166534',lineHeight:1.6}}>✅ <strong>This flat is available.</strong> Use the Share button to send via WhatsApp — the owner will see your interest.</div>}
           </>}
@@ -1541,7 +1579,11 @@ function ExplorePanel({ pins, loading, filters, onPinClick, onFlyTo, onClose, is
                       <div style={{display:'flex',gap:10,alignItems:'center'}}>
                         {aR>0&&<span style={{fontSize:13,color:rCol(aR),fontWeight:700,fontFamily:'DM Mono,monospace'}}>{fmtR(aR)}/mo</span>}
                         {aB>0&&<span style={{fontSize:13,color:pCol(aB),fontWeight:700,fontFamily:'DM Mono,monospace'}}>{fmtP(aB)}</span>}
-                        <span style={{fontSize:11,color:sc,marginLeft:'auto'}}>{total} pin{total>1?'s':''}</span>
+                        {(()=>{
+                          const cf=areaConfidence(total);
+                          if(!cf) return null;
+                          return <span title={cf.sub} style={{fontSize:10,fontWeight:700,color:cf.color,marginLeft:'auto'}}>● {cf.label}</span>;
+                        })()}
                       </div>
                     </>}
                     {total===0&&<div style={{fontSize:12,color:'#9ca3af',marginTop:2}}>No data yet</div>}
@@ -2610,6 +2652,206 @@ function HiddenCostCalc({ onClose, prefillPin }) {
   );
 }
 
+// ─── Quick Contribute ────────────────────────────────────────────────────────
+// Low-friction 3-field rent submission: area + rent + BHK. Saves to /api/pins.
+// Reuses the same backend; just hides advanced fields and submits a minimal pin.
+function QuickContribute({ onSubmit, onClose }) {
+  const [areaId,setAreaId] = useState('');
+  const [rent,setRent]     = useState('');
+  const [bhk,setBhk]       = useState('2BHK');
+  const [saving,setSaving] = useState(false);
+  const [err,setErr]       = useState('');
+
+  const submit=async()=>{
+    setErr('');
+    if(!areaId)             return setErr('Pick your area');
+    if(!rent || +rent<1000) return setErr('Enter your monthly rent (min ₹1,000)');
+    const a=aOf(areaId);
+    if(!a) return setErr('Invalid area');
+    setSaving(true);
+    try{
+      const body={
+        mode:'rent',
+        area_id:a.id, area_name:a.name, city:a.city,
+        society:'(quick add)', prop_type:'Apartment / Flat',
+        bhk, sqft:0, floor:0,
+        rent:+rent, tenant_type:'Any', furnishing:'Semi-Furnished',
+        is_available:false,
+      };
+      const r=await fetch('/api/pins',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||`HTTP ${r.status}`);
+      onSubmit(d.pin);
+      onClose();
+    }catch(ex){ setErr(ex.message); setSaving(false); }
+  };
+
+  return (
+    <div className="overlay fi" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div className="sheet su" style={{maxHeight:'70dvh'}}>
+        <div className="handle"/>
+        <div className="sh-head" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:17,color:'#111'}}>⚡ Quick rent contribute</div>
+            <div style={{fontSize:11,color:'#9ca3af',marginTop:1}}>3 fields · 30 seconds · helps everyone</div>
+          </div>
+          <button onClick={onClose} style={{width:30,height:30,borderRadius:'50%',border:'1.5px solid #e5e7eb',background:'#f9fafb',cursor:'pointer',fontSize:16,color:'#888',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
+        </div>
+        <div className="scroll" style={{padding:'18px 20px 32px',display:'flex',flexDirection:'column',gap:14}}>
+          <div>
+            <label className="lbl">Your area *</label>
+            <select className="inp" style={{appearance:'none'}} value={areaId} onChange={e=>setAreaId(e.target.value)}>
+              <option value="">Pick your area…</option>
+              {Object.entries(CITIES).map(([ck,cv])=>(
+                <optgroup key={ck} label={`─ ${cv.label}`}>
+                  {AREAS.filter(a=>a.city===ck).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="lbl">Monthly rent (₹) *</label>
+            <div style={{position:'relative'}}>
+              <span style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:14,color:'#9ca3af',fontFamily:'DM Mono,monospace'}}>₹</span>
+              <input type="number" className="inp" style={{paddingLeft:26}} placeholder="e.g. 28000" value={rent} onChange={e=>setRent(e.target.value)}/>
+            </div>
+          </div>
+          <div>
+            <label className="lbl">BHK</label>
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {BHK.map(b=>(
+                <button key={b} onClick={()=>setBhk(b)} style={{padding:'7px 14px',borderRadius:99,fontSize:12,fontWeight:600,cursor:'pointer',border:`1.5px solid ${bhk===b?'#e85d26':'#e5e7eb'}`,background:bhk===b?'#fef3ee':'#fff',color:bhk===b?'#e85d26':'#6b7280'}}>{b}</button>
+              ))}
+            </div>
+          </div>
+          {err&&<div style={{background:'#fef2f2',border:'1px solid #fecaca',borderRadius:9,padding:'10px 12px',fontSize:13,color:'#dc2626'}}>{err}</div>}
+          <button onClick={submit} disabled={saving} style={{width:'100%',padding:'14px',borderRadius:11,fontSize:14,fontWeight:700,cursor:saving?'wait':'pointer',border:'none',background:'#e85d26',color:'#fff',opacity:saving?.7:1,marginTop:4}}>
+            {saving?'Saving…':'⚡ Submit rent'}
+          </button>
+          <div style={{textAlign:'center',fontSize:11,color:'#9ca3af',lineHeight:1.6}}>
+            Anonymous · no login · helps your neighbours.<br/>
+            Need to add details? Use the full Add-pin flow instead.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Submit Compare Modal ────────────────────────────────────────────────────
+// Shown right after a pin is submitted. Compares user's value against existing
+// area stats and gives an instant "you paid X% above/below average" signal.
+function SubmitCompareModal({ submittedPin, allPins, onClose }) {
+  const isR = submittedPin.mode==='rent';
+  const userVal = isR ? +submittedPin.rent : +submittedPin.price;
+  if(!userVal) return null;
+
+  // Compare against pins in the same area, same mode, same BHK
+  const areaPins = allPins.filter(p =>
+    p.area_id===submittedPin.area_id &&
+    p.mode===submittedPin.mode &&
+    p.bhk===submittedPin.bhk &&
+    p.id!==submittedPin.id
+  );
+  const vals = isR ? areaPins.map(p=>p.rent).filter(Boolean) : areaPins.map(p=>p.price).filter(Boolean);
+  const avgVal = avg(vals);
+  const minVal = vals.length ? Math.min(...vals) : 0;
+  const maxVal = vals.length ? Math.max(...vals) : 0;
+  const area   = aOf(submittedPin.area_id);
+  const conf   = areaConfidence(areaPins.length+1);
+
+  let verdict, vColor, vIcon;
+  if(!avgVal) {
+    verdict = "You're the first to submit data for this BHK in this area";
+    vColor  = '#7c3aed'; vIcon = '🎉';
+  } else {
+    const diff = ((userVal-avgVal)/avgVal)*100;
+    if(Math.abs(diff)<5) {
+      verdict = `Right around the area average (${diff>=0?'+':''}${diff.toFixed(0)}%)`;
+      vColor  = '#2563eb'; vIcon = '✓';
+    } else if(diff<0) {
+      verdict = `${Math.abs(diff).toFixed(0)}% below the area average — you're paying less than most`;
+      vColor  = '#16a34a'; vIcon = '↓';
+    } else {
+      verdict = `${diff.toFixed(0)}% above the area average — on the higher side`;
+      vColor  = '#ea580c'; vIcon = '↑';
+    }
+  }
+
+  const fmt = isR ? fmtR : fmtP;
+
+  return (
+    <div className="overlay fi" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div className="sheet su" style={{maxHeight:'80dvh'}}>
+        <div className="handle"/>
+        <div className="sh-head" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:17,color:'#111'}}>✅ Pin submitted — thanks!</div>
+            <div style={{fontSize:11,color:'#9ca3af',marginTop:1}}>How your rate compares</div>
+          </div>
+          <button onClick={onClose} style={{width:30,height:30,borderRadius:'50%',border:'1.5px solid #e5e7eb',background:'#f9fafb',cursor:'pointer',fontSize:16,color:'#888',display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
+        </div>
+        <div className="scroll" style={{padding:'18px 20px 28px'}}>
+          {/* User value */}
+          <div style={{textAlign:'center',padding:'14px 0 18px',borderBottom:'1px solid #f3f4f6',marginBottom:18}}>
+            <div style={{fontSize:11,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em',marginBottom:4}}>Your submission</div>
+            <div style={{fontSize:32,fontWeight:800,color:isR?rCol(userVal):pCol(userVal),fontFamily:'DM Mono,monospace',lineHeight:1}}>
+              {fmt(userVal)}{isR?'/mo':''}
+            </div>
+            <div style={{fontSize:13,color:'#6b7280',marginTop:5}}>
+              {area?.name||submittedPin.area_name} · {submittedPin.bhk}
+            </div>
+          </div>
+
+          {/* Verdict callout */}
+          <div style={{background:vColor+'10',border:`1.5px solid ${vColor}33`,borderRadius:12,padding:'14px 16px',marginBottom:16,display:'flex',gap:12,alignItems:'flex-start'}}>
+            <div style={{fontSize:24,flexShrink:0,color:vColor}}>{vIcon}</div>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:vColor,marginBottom:3}}>{verdict}</div>
+              {avgVal>0 && (
+                <div style={{fontSize:12,color:'#6b7280',lineHeight:1.55}}>
+                  Based on {areaPins.length} other {submittedPin.bhk} {isR?'rent':'sale'} pin{areaPins.length>1?'s':''} in {area?.name||submittedPin.area_name}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Stats row */}
+          {avgVal>0 && (
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:16}}>
+              {[
+                ['Min', minVal, '#16a34a'],
+                ['Avg', avgVal, '#2563eb'],
+                ['Max', maxVal, '#dc2626'],
+              ].map(([lbl,v,c])=>(
+                <div key={lbl} style={{background:'#f8fafc',border:'1px solid #e5e7eb',borderRadius:10,padding:'10px',textAlign:'center'}}>
+                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.04em'}}>{lbl}</div>
+                  <div style={{fontFamily:'DM Mono,monospace',fontSize:13,fontWeight:700,color:c,marginTop:3}}>{fmt(v)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Confidence */}
+          {conf && (
+            <div style={{background:'#f8fafc',border:'1px solid #e5e7eb',borderRadius:10,padding:'10px 12px',marginBottom:14,display:'flex',alignItems:'center',gap:8}}>
+              <div style={{width:8,height:8,borderRadius:'50%',background:conf.color,flexShrink:0}}/>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:conf.color}}>{conf.label}</div>
+                <div style={{fontSize:11,color:'#9ca3af'}}>{conf.sub} · this BHK in this area</div>
+              </div>
+            </div>
+          )}
+
+          <button onClick={onClose} style={{width:'100%',padding:'12px',borderRadius:11,border:'none',background:'#111',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function NCRRealty({ initialPins=[] }) {
   const [pins,setPins]         = useState(initialPins);
@@ -2623,6 +2865,8 @@ export default function NCRRealty({ initialPins=[] }) {
   const [showWizard,setWizard] = useState(false);
   const [showCalc,setShowCalc] = useState(false);
   const [calcPin,setCalcPin]   = useState(null);  // pin to prefill calculator with
+  const [showQuick,setShowQuick] = useState(false);
+  const [comparePin,setComparePin] = useState(null); // pin to show compare modal for after submit
   const [fhDropMode,setFhDrop] = useState(false);  // waiting for user to tap map for flat hunt
   const [fhCoords,setFhCoords] = useState(null);   // captured flat hunt location
   const [fhAreaName,setFhArea] = useState('');
@@ -2660,11 +2904,12 @@ export default function NCRRealty({ initialPins=[] }) {
 
   const addPin=p=>{
     setPins(prev=>[p,...prev]);
-    setToast('📍 Pin submitted! It\'s now live on the map');
     // fly to newly submitted pin
     const lat=p.pin_lat??aOf(p.area_id)?.lat;
     const lng=p.pin_lng??aOf(p.area_id)?.lng;
     if(lat&&lng) setTimeout(()=>setFlyTo({lat,lng,zoom:17,ts:Date.now()}),400);
+    // Show instant comparison modal
+    setComparePin(p);
   };
 
   const upvote=async id=>{
@@ -2675,6 +2920,35 @@ export default function NCRRealty({ initialPins=[] }) {
       if(d.already_voted){setToast('Already upvoted');return;}
       if(r.ok){setPins(prev=>prev.map(p=>p.id===id?{...p,upvotes:(p.upvotes||0)+1}:p));setToast('👍 Upvoted!');}
     }catch{}
+  };
+
+  // "I paid similar / lower / higher" — creates a new anonymous pin echoing the parent
+  const quickEcho=async(parent, kind)=>{
+    if(!parent || parent.mode!=='rent' || !parent.rent) return;
+    let newRent = parent.rent;
+    if(kind==='lower')  newRent = Math.round(parent.rent * 0.92);  // ~8% lower
+    if(kind==='higher') newRent = Math.round(parent.rent * 1.08);  // ~8% higher
+    // 'similar' keeps it identical
+    try{
+      const body={
+        mode:'rent',
+        area_id:parent.area_id, area_name:parent.area_name, city:parent.city,
+        society:parent.society||'(echo)', prop_type:parent.prop_type||'Apartment / Flat',
+        bhk:parent.bhk, sqft:parent.sqft||0, floor:parent.floor||0,
+        rent:newRent,
+        tenant_type:parent.tenant_type||'Any', furnishing:parent.furnishing||'Semi-Furnished',
+        is_available:false,
+        note: kind==='similar' ? 'Confirmed similar rate' : kind==='lower' ? 'Paid less' : 'Paid more',
+      };
+      const r=await fetch('/api/pins',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||`HTTP ${r.status}`);
+      setPins(prev=>[d.pin,...prev]);
+      setSelPin(null);
+      setComparePin(d.pin);
+    }catch(ex){
+      setToast('⚠ Could not save: '+ex.message);
+    }
   };
 
   const handleMapClick=(lat,lng)=>{
@@ -2853,6 +3127,12 @@ export default function NCRRealty({ initialPins=[] }) {
             🏠
           </button>
 
+          <button className={'rail-btn'+(showQuick?' active':'')}
+            data-tip="Quick rent contribute"
+            onClick={()=>setShowQuick(q=>!q)}>
+            ⚡
+          </button>
+
           <button className={'rail-btn'+(showWizard?' active':'')}
             data-tip="Best areas for budget"
             onClick={()=>setWizard(w=>!w)}>
@@ -2983,9 +3263,11 @@ export default function NCRRealty({ initialPins=[] }) {
       {showFH      &&<FlatHuntSheet onClose={()=>setShowFH(false)} onRequestMapDrop={()=>{setShowFH(false);setFhDrop(true);}} pendingCoords={fhCoords} pendingAreaName={fhAreaName}/>}
       {showWizard  &&<BudgetWizard pins={pins} onClose={()=>setWizard(false)} onFlyTo={v=>setFlyTo({...v,ts:Date.now()})} onApplyFilters={f=>{setFilters(f);}}/>}
       {showCalc    &&<HiddenCostCalc onClose={()=>{setShowCalc(false);setCalcPin(null);}} prefillPin={calcPin}/>}
+      {showQuick   &&<QuickContribute onSubmit={addPin} onClose={()=>setShowQuick(false)}/>}
+      {comparePin  &&<SubmitCompareModal submittedPin={comparePin} allPins={pins} onClose={()=>setComparePin(null)}/>}
       {showExplore&&isMobile&&<ExplorePanel pins={pins} loading={loading} filters={filters} onPinClick={p=>{setSelPin(p);const _c=pinCoords(p);if(_c)setFlyTo({lat:_c.lat,lng:_c.lng,zoom:_c.exact?17:14,ts:Date.now()});}} onFlyTo={v=>setFlyTo({...v,ts:Date.now()})} onClose={()=>setShowE(false)} isMobile={true}/>}
       {showForm    &&<PinForm onSubmit={addPin} onClose={closeForm} defaultMode={formMode} prefLat={dropLat} prefLng={dropLng}/>}
-      {selPin      &&<PinDetail pin={selPin} onClose={()=>setSelPin(null)} onUpvote={upvote} onFlyTo={p=>{setFlyTo({...p,ts:Date.now()});setSelPin(null);}} onCalc={p=>{setCalcPin(p);setShowCalc(true);}}/>}
+      {selPin      &&<PinDetail pin={selPin} onClose={()=>setSelPin(null)} onUpvote={upvote} onFlyTo={p=>{setFlyTo({...p,ts:Date.now()});setSelPin(null);}} onCalc={p=>{setCalcPin(p);setShowCalc(true);}} onQuickEcho={quickEcho} allPins={pins}/>}
     </>
   );
 }
